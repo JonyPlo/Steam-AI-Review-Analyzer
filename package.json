@@ -1,0 +1,19 @@
+{
+  "name": "steam-ai-review-analyzer",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Analiza reseñas de Steam con IA: resumen de la comunidad, destacados y veredicto",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev": "concurrently -n api,web -c green,cyan \"npm run dev --workspace server\" \"npm run dev --workspace web\"",
+    "start": "npm run start --workspace server",
+    "build": "npm run build --workspace web",
+    "lint": "npm run lint --workspace web"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
