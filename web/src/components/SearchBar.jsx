@@ -193,9 +193,16 @@ export default function SearchBar({ value, onChange, juegos, onPick, onSubmit, c
                   }`}
                 >
                   <img
-                    src={juego.capsule_image}
+                    src={juego.capsule_image || juego.header_image}
                     alt=""
-                    className="h-10 w-[84px] shrink-0 border border-line object-cover sm:h-12 sm:w-[100px]"
+                    onError={(e) => {
+                      // si el capsule 404, cae al header (misma proporción)
+                      if (e.target.dataset.fallback !== '1' && juego.header_image) {
+                        e.target.dataset.fallback = '1'
+                        e.target.src = juego.header_image
+                      }
+                    }}
+                    className="h-10 aspect-[231/87] shrink-0 border border-line object-cover sm:h-12"
                     loading="lazy"
                   />
                   <span className="min-w-0 flex-1">

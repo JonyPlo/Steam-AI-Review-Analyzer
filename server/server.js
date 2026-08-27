@@ -12,7 +12,7 @@ const IGDB_CLIENT_SECRET = process.env.IGDB_CLIENT_SECRET
 const groq = GROQ_API_KEY ? new Groq({ apiKey: GROQ_API_KEY }) : null
 
 const app = express()
-const PORT = 3001
+const PORT = process.env.PORT || 3001
 
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*')
@@ -49,27 +49,34 @@ function desescaparHTML(texto) {
     .replace(/&nbsp;/g, ' ')
 }
 
-// La página de resultados del store es HTML server-rendered: de ahí extraemos
-// hasta 20 juegos (appid + nombre + capsule) por consulta. El API storesearch
-// (que era la fuente anterior) está topado en 10 resultados.
+// La página de resultados del store es HTML server-rendered. CADA JUEGO es
+// un <a href=".../app/{ID}/..." ... class="search_result_row ..."> completo
+// que contiene su título e imagen. El id se toma del href del propio tag:
+// así id, título e imagen pertenecen a la misma fila por construcción.
+// (NO dividir por el string "search_result_row" y tomar el primer
+// data-ds-appid del trozo: en varias variantes del markup la class lleva
+// tokens extra —"search_result_row ds_collapse_flag"— y el data-ds-appid va
+// ANTES de la class, por lo que ese método caía al id de la fila siguiente
+// o perdía filas enteras.)
 // ponytail: scraping regex de un HTML que Steam puede cambiar; si falla, /buscar
 // cae al fallback de storesearch (10 juegos). Upgrade path: API oficial de búsqueda.
 function parsearResultadosSteam(html) {
   const filas = []
   const vistos = new Set()
-  const chunks = html.split('class="search_result_row')
-  for (let i = 1; i < chunks.length && filas.length < 20; i++) {
-    const chunk = chunks[i]
-    const mApp = chunk.match(/data-ds-appid="(\d+)"/)
-    const mNombre = chunk.match(/<span class="title">([^<]+)<\/span>/)
-    const mCapsule = chunk.match(/<img src="([^"]+)"/)
-    if (mApp && mNombre && !vistos.has(mApp[1])) {
-      vistos.add(mApp[1])
-      filas.push({
-        appId: mApp[1],
-        name: desescaparHTML(mNombre[1].trim()),
-        capsule: mCapsule ? mCapsule[1] : null,
-      })
+  const reFila = /<a[^>]*class="search_result_row[^"]*"[^>]*>/g
+  const matches = [...html.matchAll(reFila)]
+  for (let i = 0; i < matches.length && filas.length < 20; i++) {
+    const tag = matches[i][0]
+    const inicio = matches[i].index
+    const fin = i + 1 < matches.length ? matches[i + 1].index : inicio + tag.length + 4000
+    const contenido = html.slice(inicio + tag.length, fin)
+    const mHref = tag.match(/store\.steampowered\.com\/(?:app|agecheck\/app)\/(\d+)/)
+    const mDs = tag.match(/data-ds-appid="(\d+)"/)
+    const mNombre = contenido.match(/<span class="title">([^<]+)<\/span>/)
+    const appId = mHref?.[1] || mDs?.[1]
+    if (appId && mNombre && !vistos.has(appId)) {
+      vistos.add(appId)
+      filas.push({ appId, name: desescaparHTML(mNombre[1].trim()) })
     }
   }
   return filas
@@ -104,37 +111,48 @@ app.get('/buscar', async (req, res) => {
       }))
     }
 
-    // 2. Enriquecemos los juegos en paralelo: solo 1 consulta por juego (resumen de
-    // reviews). El capsule viene de la búsqueda cuando existe; si no, URL estándar.
+    // 2. Enriquecemos cada juego en paralelo con DOS fuentes de Steam:
+    //    - appdetails (la MISMA que usa la sala y la grilla de inicio):
+    //      nombre OFICIAL + URLs de imagen REALES del juego. Nunca se
+    //      confía en el nombre/imagen del HTML ni en URLs conjeturadas:
+    //      la página de resultados entrega el título de cada fila
+    //      desalineado respecto a su data-ds-appid (cada título
+    //      corresponde al appid de la fila de al lado), y el patrón
+    //      apps/{id}/header.jpg da 404 en varios juegos. Appdetails
+    //      garantiza que nombre, imagen y clic siempre sean del mismo
+    //      juego, porque todo sale del mismo appid.
+    //    - appreviews: cantidad de reseñas + polaridad.
     const promesasEnriquecer = topJuegos.map(async (juego) => {
       const appId = juego.appId
-      const capsule_image =
-        juego.capsule ||
-        `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/capsule_231x87.jpg`
 
-      try {
-        const urlReviewsSummary = `https://store.steampowered.com/appreviews/${appId}?json=1&language=all&num_per_page=0`
-        const resSummary = await axios.get(urlReviewsSummary)
-        const summary = resSummary.data?.query_summary || {}
+      const [resDetails, resSummary] = await Promise.all([
+        axios
+          .get(`https://store.steampowered.com/api/appdetails?appids=${appId}`, {
+            headers: { 'User-Agent': 'Mozilla/5.0' },
+          })
+          .catch(() => null),
+        axios
+          .get(`https://store.steampowered.com/appreviews/${appId}?json=1&language=all&num_per_page=0`)
+          .catch(() => null),
+      ])
 
-        return {
-          appId,
-          name: juego.name,
-          header_image: `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/header.jpg`,
-          capsule_image,
-          total_reviews: summary.total_reviews || 0,
-          review_score_desc: summary.review_score_desc || 'Sin análisis',
-        }
-      } catch (err) {
-        // Fallback de seguridad si algo falla en la petición
-        return {
-          appId,
-          name: juego.name,
-          header_image: `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/header.jpg`,
-          capsule_image,
-          total_reviews: 0,
-          review_score_desc: 'Sin análisis',
-        }
+      const details = resDetails?.data?.[appId]?.data || {}
+      const summary = resSummary?.data?.query_summary || {}
+
+      return {
+        appId,
+        // Nombre oficial de appdetails; solo si falla, el de la búsqueda.
+        name: details.name || juego.name,
+        // Imágenes reales de appdetails (mismas URLs que la grilla de
+        // inicio y la portada de la sala); si no, URL estándar.
+        header_image:
+          details.header_image ||
+          `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/header.jpg`,
+        capsule_image:
+          details.capsule_imagev5 ||
+          `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/capsule_231x87.jpg`,
+        total_reviews: summary.total_reviews || 0,
+        review_score_desc: summary.review_score_desc || 'Sin análisis',
       }
     })
 

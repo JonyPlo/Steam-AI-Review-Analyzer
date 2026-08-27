@@ -411,15 +411,12 @@ body {
 }
 }
 
-/* Reduced motion: nada en bucle, nada en cascada */
+/* Reduced motion: nada en bucle, nada en cascada.
+   (.progress-run queda fuera a propósito: la barra de carga es feedback
+   funcional y siempre debe moverse, o la app parece congelada.) */
 @media (prefers-reduced-motion: reduce) {
   .skeleton {
     animation: none;
-  }
-  .progress-run {
-    animation: none;
-    width: 100%;
-    transform: none;
   }
   .mark-dot {
     animation: none;

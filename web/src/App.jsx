@@ -130,16 +130,6 @@ function esTexto(s) {
   return !!s && s.replace(/[\s.\u2026\u2025]/g, '').length > 0
 }
 
-/* La proporción nativa de un asset de Steam, declarada en la URL
-   (capsule_616x353.jpg → "616 / 353"). Steam NO entrega siempre el
-   mismo tamaño: hay headers de 1920×1080 y de 460×215, cápsulas de
-   616×353 y de 184×69. Ajustar el contenedor a la proporción real es
-   la única forma de que la imagen se vea siempre entera. */
-function ratioDeAsset(url, porDefecto) {
-  const m = /(\d+)x(\d+)\.(?:jpe?g|png)/i.exec(url || '')
-  return m ? `${m[1]} / ${m[2]}` : porDefecto
-}
-
 function chipSemantica(desc) {
   if (!desc || !desc.trim()) return 'chip !text-faint'
   if (desc === 'Mixed') return 'chip chip-mix'
@@ -254,6 +244,37 @@ function TituloSala({ nombre }) {
     >
       {nombre}
     </h2>
+  )
+}
+
+/* Título de la grilla del catálogo: SIEMPRE una sola línea. Si el
+   nombre no entra, se achica el font-size (nunca dos líneas) y el
+   span mantiene altura fija (h-6) para que el chip de reseña quede
+   a la misma altura en todas las cards de la fila. */
+function TituloCard({ nombre }) {
+  const ref = useRef(null)
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const medir = () => {
+      el.style.fontSize = '' // siempre mide en tamaño natural
+      const base = parseFloat(getComputedStyle(el).fontSize)
+      const ratio = el.clientWidth / el.scrollWidth
+      if (ratio < 1) el.style.fontSize = `${Math.max(base * ratio, base * 0.5)}px`
+    }
+    medir()
+    if (document.fonts?.ready) document.fonts.ready.then(medir)
+    window.addEventListener('resize', medir)
+    return () => window.removeEventListener('resize', medir)
+  }, [nombre])
+  return (
+    <span
+      ref={ref}
+      title={nombre}
+      className="font-display flex h-6 items-center overflow-hidden whitespace-nowrap text-[15px] font-bold tracking-tight text-ink uppercase transition-colors group-hover:text-accent"
+    >
+      {nombre}
+    </span>
   )
 }
 
@@ -429,6 +450,67 @@ function RecienteCard({ j, onOpen }) {
   )
 }
 
+/* Card del catálogo (resultados de búsqueda): la MISMA imagen de alta
+   calidad que la grilla de inicio (header de /buscar, con cápsula de
+   respaldo) y el MISMO contenedor: 16:9 que, al cargar, adopta la
+   proporción nativa de la imagen — la obra siempre entera, nunca se
+   corta, y como todos los headers de Steam son 1920×1080, todas las
+   cards miden igual y los chips quedan alineados. */
+function CatalogoCard({ juego, idx, onOpen, reduced }) {
+  const [ratio, setRatio] = useState(null)
+  return (
+    <motion.button
+      type="button"
+      onClick={() => onOpen(juego.appId)}
+      initial={reduced ? false : { opacity: 0, y: 14 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{
+        duration: 0.35,
+        delay: reduced ? 0 : Math.min(idx, 15) * 0.04,
+        ease: EASE,
+      }}
+      className="sala-card group flex h-full flex-col text-left"
+    >
+      <span className="relative block w-full overflow-hidden border-b border-line">
+        <span className="block w-full overflow-hidden bg-raised" style={{ aspectRatio: ratio || '16 / 9' }}>
+          <img
+            src={juego.header_image || juego.capsule_image}
+            alt=""
+            loading="lazy"
+            onLoad={(e) => {
+              const el = e.currentTarget
+              if (el.naturalWidth && el.naturalHeight) {
+                setRatio(`${el.naturalWidth} / ${el.naturalHeight}`)
+              }
+            }}
+            onError={(e) => {
+              e.currentTarget.style.display = 'none'
+            }}
+            className="sala-img h-full w-full object-cover"
+          />
+        </span>
+        <span
+          aria-hidden="true"
+          className="font-display absolute left-3 top-3 border border-line bg-bg/90 px-2 py-1 text-xs leading-none text-accent"
+        >
+          {String(idx + 1).padStart(2, '0')}
+        </span>
+      </span>
+      <span className="flex w-full flex-1 flex-col p-4 sm:p-5">
+        <TituloCard nombre={juego.name} />
+        <span className={`mt-3 self-start ${chipSemantica(juego.review_score_desc)}`}>
+          {traducirReview(juego.review_score_desc)}
+        </span>
+        <span className="label mt-auto pt-4 !text-[10px] text-faint">
+          {juego.total_reviews > 0
+            ? `${juego.total_reviews.toLocaleString('es-AR')} reseñas`
+            : 'Sin reseñas todavía'}
+        </span>
+      </span>
+    </motion.button>
+  )
+}
+
 /* Salas ya visitadas: se leen del cache local (analisis_*).
    Ficha de catálogo reutilizada; abrirla es instantáneo. */
 function RecientesSala({ juegos, reduced, onOpen }) {
@@ -457,9 +539,10 @@ function RecientesSala({ juegos, reduced, onOpen }) {
   )
 }
 
-/* Panel de carga: spinner + cronómetro real + barra (la IA tarda 10-40s) */
+/* Panel de carga: spinner + cronómetro real + barra (la IA tarda 10-40s).
+   La barra y el spinner SIEMPRE se animan (no respetan prefers-reduced-motion):
+   es feedback funcional — un indicador de carga estático parece una app congelada. */
 function PanelCargaAnalisis() {
-  const reduced = useReducedMotion()
   const [segundos, setSegundos] = useState(0)
   useEffect(() => {
     const id = setInterval(() => setSegundos((s) => s + 1), 1000)
@@ -469,7 +552,7 @@ function PanelCargaAnalisis() {
   return (
     <div className="plate p-8 text-center sm:p-14">
       <div className="mx-auto grid h-12 w-12 place-items-center border border-line text-accent" aria-hidden="true">
-        <Loader2 size={20} className={reduced ? '' : 'animate-spin'} />
+        <Loader2 size={20} className="animate-spin" />
       </div>
       <p className="label mt-6 text-accent">Preparando la sala</p>
       <h2 className="font-display mt-3 text-2xl tracking-tight text-ink sm:text-3xl">
@@ -541,7 +624,7 @@ export default function App() {
     let activo = true
     const timer = setTimeout(async () => {
       setSearching(true)
-      const cacheKey = `busqueda_${q.toLowerCase()}`
+      const cacheKey = `busqueda3_${q.toLowerCase()}`
       let data = obtenerDeCache(cacheKey)
       if (!data) {
         try {
@@ -588,7 +671,7 @@ export default function App() {
     setListLoading(true)
     setListError(null)
 
-    const cacheKey = `busqueda_${q.toLowerCase()}`
+    const cacheKey = `busqueda3_${q.toLowerCase()}`
     let data = obtenerDeCache(cacheKey)
     if (!data) {
       try {
@@ -873,12 +956,10 @@ export default function App() {
                   </div>
 
                   {listLoading ? (
-                    <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5 lg:grid-cols-3 xl:grid-cols-4">
-                      {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
+                    <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5 lg:grid-cols-3">
+                      {[0, 1, 2].map((i) => (
                         <div key={i} className="border border-line bg-surface">
-                          {/* 231×87: la cápsula real de /buscar, para que
-                              el skeleton mida igual que la tarjeta cargada. */}
-                          <div className="skeleton w-full" style={{ aspectRatio: '231 / 87' }} />
+                          <div className="skeleton w-full" style={{ aspectRatio: '16 / 9' }} />
                           <div className="flex flex-col gap-2.5 p-4 sm:p-5">
                             <div className="skeleton h-5 w-3/4" />
                             <div className="skeleton h-4 w-1/2" />
@@ -896,58 +977,15 @@ export default function App() {
                       </p>
                     </div>
                   ) : (
-                    <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5 lg:grid-cols-3 xl:grid-cols-4">
+                    <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5 lg:grid-cols-3">
                       {juegosListado.map((juego, idx) => (
-                        <motion.button
+                        <CatalogoCard
                           key={juego.appId}
-                          type="button"
-                          onClick={() => cargarAnalisis(juego.appId)}
-                          initial={reduced ? false : { opacity: 0, y: 14 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{
-                            duration: 0.35,
-                            delay: reduced ? 0 : Math.min(idx, 15) * 0.04,
-                            ease: EASE,
-                          }}
-                          className="sala-card group flex h-full flex-col text-left"
-                        >
-                          <span className="relative block w-full overflow-hidden border-b border-line">
-                            {/* Proporción nativa de la cápsula (la URL declara
-                                el tamaño): la imagen entera, sin zoom. */}
-                            <img
-                              src={juego.capsule_image}
-                              alt=""
-                              loading="lazy"
-                              onError={(e) => {
-                                e.currentTarget.style.display = 'none'
-                              }}
-                              style={{ aspectRatio: ratioDeAsset(juego.capsule_image, '616 / 353') }}
-                              className="sala-img w-full object-cover"
-                            />
-                            <span
-                              aria-hidden="true"
-                              className="font-display absolute left-3 top-3 border border-line bg-bg/90 px-2 py-1 text-xs leading-none text-accent"
-                            >
-                              {String(idx + 1).padStart(2, '0')}
-                            </span>
-                          </span>
-                          <span className="flex w-full flex-1 flex-col p-4 sm:p-5">
-                            <span
-                              className="font-display line-clamp-2 text-[15px] font-bold tracking-tight text-ink uppercase transition-colors group-hover:text-accent"
-                              title={juego.name}
-                            >
-                              {juego.name}
-                            </span>
-                            <span className={`mt-3 self-start ${chipSemantica(juego.review_score_desc)}`}>
-                              {traducirReview(juego.review_score_desc)}
-                            </span>
-                            <span className="label mt-auto pt-4 !text-[10px] text-faint">
-                              {juego.total_reviews > 0
-                                ? `${juego.total_reviews.toLocaleString('es-AR')} reseñas`
-                                : 'Sin reseñas todavía'}
-                            </span>
-                          </span>
-                        </motion.button>
+                          juego={juego}
+                          idx={idx}
+                          onOpen={cargarAnalisis}
+                          reduced={reduced}
+                        />
                       ))}
                     </div>
                   )}
