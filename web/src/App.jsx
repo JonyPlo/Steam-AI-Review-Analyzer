@@ -327,7 +327,6 @@ function MuroTexto({
   kicker,
   titulo,
   resumen,
-  intro,
   etiquetas,
   cierre,
   nota,
@@ -336,31 +335,7 @@ function MuroTexto({
 }) {
   const hayEtiquetas = !!etiquetas?.length
   const resumenT = esTexto(resumen) ? resumen : null
-  const introT = esTexto(intro) ? intro : null
   const cierreT = esTexto(cierre) ? cierre : null
-
-  const texto = (
-    <>
-      {resumenT && <p className="max-w-[58ch] text-[16.5px] leading-relaxed text-ink">{resumenT}</p>}
-      {introT && (
-        <p className={`max-w-[52ch] text-sm leading-relaxed text-muted ${resumenT ? 'mt-5' : ''}`}>
-          {introT}
-        </p>
-      )}
-    </>
-  )
-
-  const veredicto = (
-    <>
-      {cierreT && (
-        <div className="verdict-plate p-5 sm:p-6">
-          <p className="label">Veredicto</p>
-          <p className="mt-2.5 text-[15px] font-semibold leading-relaxed">{cierreT}</p>
-        </div>
-      )}
-      <p className={`${cierreT ? 'mt-5' : ''}text-xs leading-relaxed text-faint`}>{nota}</p>
-    </>
-  )
 
   return (
     <motion.section
@@ -378,30 +353,49 @@ function MuroTexto({
         </span>
         <div className="min-w-0 pt-1 sm:pt-1.5">
           <Label>{kicker}</Label>
-          <h3 className="font-display mt-1 text-xl tracking-tight text-ink sm:text-2xl">{titulo}</h3>
+          <h3 className="font-display mt-1 text-2xl tracking-tight text-ink sm:text-3xl">{titulo}</h3>
         </div>
       </header>
 
-      {/* Escritorio: texto (arriba-izq) + veredicto (abajo-izq); las
-          etiquetas abarcan ambas filas y se reparten para que su
-          primera y última línea cierren con el muro. Mobile se lee
-          texto → etiquetas → veredicto. */}
-      {hayEtiquetas ? (
-        <div className="mt-7 grid grid-cols-1 gap-8 [grid-template-areas:'t'_'l'_'v'] lg:grid-cols-12 lg:gap-x-12 lg:gap-y-8 lg:[grid-template-areas:'t_t_t_t_t_l_l_l_l_l_l_l'_'v_v_v_v_v_l_l_l_l_l_l_l']">
-          <div className="[grid-area:t]">{texto}</div>
-          <div className="flex flex-col gap-4 [grid-area:l] lg:justify-between">
+      {/* Lectura vertical, un bloque por fila: resumen → 2 etiquetas
+          → veredicto. Cada bloque abarca todo el ancho y nada se
+          reparte contra la altura: una cita larga estira la fila
+          (la grilla iguala alturas, la métrica anclada abajo con
+          mt-auto) y una corta no deja huecos. Mobile: todo apila. */}
+      {resumenT && (
+        /* A ancho completo, como el texto del veredicto: a dos
+           columnas el párrafo corto se cortaba a la mitad y el
+           bloque quedaba roto */
+        <p className="mt-7 text-[16.5px] leading-relaxed text-ink">{resumenT}</p>
+      )}
+
+      {hayEtiquetas && (
+        <div className="mt-9 border-t border-line pt-6 lg:mt-10 lg:pt-7">
+          <div className="flex items-baseline justify-between gap-4">
+            <Label>Comentarios destacados</Label>
+            <span aria-hidden="true" className="font-display text-sm text-faint">
+              {String(etiquetas.length).padStart(2, '0')}
+            </span>
+          </div>
+          {/* grid-cols-2 solo con 2+ etiquetas: una sola etiqueta no
+              merece una grilla con media fila vacía */}
+          <div
+            className={`mt-5 grid gap-4 lg:gap-5 ${etiquetas.length > 1 ? 'md:grid-cols-2' : ''}`}
+          >
             {etiquetas.map((resena) => (
               <ReviewCard key={resena.recommendationid} resena={resena} />
             ))}
           </div>
-          <div className="flex flex-col justify-end [grid-area:v]">{veredicto}</div>
-        </div>
-      ) : (
-        <div className="mt-7 flex flex-col gap-8">
-          <div>{texto}</div>
-          <div className="max-w-xl">{veredicto}</div>
         </div>
       )}
+
+      {cierreT && (
+        <div className="verdict-plate mt-9 p-5 sm:p-6 lg:mt-10">
+          <p className="label">Veredicto</p>
+          <p className="mt-2.5 text-[15px] font-semibold leading-relaxed">{cierreT}</p>
+        </div>
+      )}
+      <p className="mt-5 text-xs leading-relaxed text-faint">{nota}</p>
     </motion.section>
   )
 }
@@ -1122,10 +1116,9 @@ export default function App() {
                   <section className="mx-auto flex w-full max-w-7xl flex-col gap-10 px-4 pb-20 pt-2 sm:px-6 sm:gap-12">
                     <MuroTexto
                       numeral="I"
-                      kicker="Ventana móvil · 30 días"
+                      kicker="Últimos 30 días"
                       titulo="Lo que dice el público hoy"
                       resumen={analisisData.resumenTecnico}
-                      intro={analisisData.introDestacadosRecientes}
                       etiquetas={analisisData.destacadosRecientes}
                       cierre={analisisData.cierreRecientes}
                       nota="Basado en las reseñas de los últimos 30 días de Steam."
@@ -1136,7 +1129,6 @@ export default function App() {
                       kicker="Historial completo"
                       titulo="Lo mejor valorado de siempre"
                       resumen={analisisData.resumenGeneral}
-                      intro={analisisData.introDestacadosHistoricos}
                       etiquetas={analisisData.destacadosHistoricos}
                       cierre={analisisData.cierreHistoricos}
                       nota="Basado en las reseñas más valoradas de toda la vida del juego."

@@ -126,7 +126,12 @@ algo más ruidoso.
   cargar la fuente y al redimensionar; `title` guarda el nombre completo.
 - **Responsive:** la sala apila (obra → placa → paneles); en la portada, la obra
   mantiene `aspect-[2/1]` en móvil y se estira a la altura de la placa en `lg` (bordes
-  inferiores alineados); dentro de cada panel, texto y etiquetas apilan (texto primero);
+  inferiores alineados); dentro de cada panel la lectura es vertical (resumen → 2
+  etiquetas → veredicto; el resumen y el veredicto van a ancho completo como párrafo
+  corrido): en md+ las etiquetas comparten fila y la grilla les da la
+  misma altura (la métrica se ancla abajo con mt-auto, una cita larga no abre huecos
+  ni una corta deja el muro a medias) y el veredicto cierra como placa dorada a todo el
+  ancho; en móvil todo se apila;
   el catálogo va 1 → 2 → 3 → 4 columnas; en el vestíbulo, el muro de salas se oculta en
   móvil (su lugar lo ocupa la grilla de recientes, 1 → 2 → 3 columnas, cápsula
   completa). Cero scroll horizontal. (Rediseño #3: tipografía un paso arriba en todo

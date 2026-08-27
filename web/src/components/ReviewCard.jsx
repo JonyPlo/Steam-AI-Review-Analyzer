@@ -71,7 +71,7 @@ export default function ReviewCard({ resena }) {
   }
 
   return (
-    <article className="label-card p-4 sm:p-5">
+    <article className="label-card flex h-full flex-col p-4 sm:p-5">
       {/* firma: marca dorada + autor + veredicto del reviewer + meta */}
       <header className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 bg-accent" />
@@ -118,7 +118,7 @@ export default function ReviewCard({ resena }) {
       </blockquote>
 
       {/* métricas */}
-      <footer className="relative mt-4 flex flex-wrap items-center gap-2" ref={tipRef}>
+      <footer className="relative mt-auto flex flex-wrap items-center gap-2 pt-4" ref={tipRef}>
         {metrics.map(({ id, icon: Icon, value, tip }) => (
           <button
             key={id}
