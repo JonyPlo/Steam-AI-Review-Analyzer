@@ -38,29 +38,78 @@ async function obtenerIgdbToken() {
 }
 
 // ENDPOINT 1: Buscador optimizado para renderizar las tarjetas del listado
+// Desescapa las entidades HTML básicas que aparecen en los nombres del store.
+function desescaparHTML(texto) {
+  return texto
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#0?39;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+}
+
+// La página de resultados del store es HTML server-rendered: de ahí extraemos
+// hasta 20 juegos (appid + nombre + capsule) por consulta. El API storesearch
+// (que era la fuente anterior) está topado en 10 resultados.
+// ponytail: scraping regex de un HTML que Steam puede cambiar; si falla, /buscar
+// cae al fallback de storesearch (10 juegos). Upgrade path: API oficial de búsqueda.
+function parsearResultadosSteam(html) {
+  const filas = []
+  const vistos = new Set()
+  const chunks = html.split('class="search_result_row')
+  for (let i = 1; i < chunks.length && filas.length < 20; i++) {
+    const chunk = chunks[i]
+    const mApp = chunk.match(/data-ds-appid="(\d+)"/)
+    const mNombre = chunk.match(/<span class="title">([^<]+)<\/span>/)
+    const mCapsule = chunk.match(/<img src="([^"]+)"/)
+    if (mApp && mNombre && !vistos.has(mApp[1])) {
+      vistos.add(mApp[1])
+      filas.push({
+        appId: mApp[1],
+        name: desescaparHTML(mNombre[1].trim()),
+        capsule: mCapsule ? mCapsule[1] : null,
+      })
+    }
+  }
+  return filas
+}
+
 app.get('/buscar', async (req, res) => {
   const { name } = req.query
   if (!name) return res.json([])
 
   try {
-    // 1. Buscamos los juegos que coincidan con el nombre (Steam los ordena por popularidad)
-    const urlBusqueda = `https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(name)}&l=spanish&cc=AR`
-    const respuestaBusqueda = await axios.get(urlBusqueda)
+    // 1. Fuente de juegos: la página de resultados del store (SSR, 20+ por consulta).
+    //    Si falla, fallback al API storesearch (topado en 10).
+    let topJuegos = []
+    try {
+      const urlPagina = `https://store.steampowered.com/search/results/?term=${encodeURIComponent(name)}&f=games&cc=AR&l=spanish`
+      const pagina = await axios.get(urlPagina, {
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+      })
+      topJuegos = parsearResultadosSteam(pagina.data)
+    } catch (err) {
+      console.warn('HTML de resultados no disponible, uso storesearch:', err.message)
+    }
 
-    const items = respuestaBusqueda.data?.items || []
-    // Cortamos a los primeros 10 para armar el listado principal
-    const topJuegos = items.slice(0, 10)
+    if (topJuegos.length === 0) {
+      const urlBusqueda = `https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(name)}&l=spanish&cc=AR`
+      const respuestaBusqueda = await axios.get(urlBusqueda)
+      const items = respuestaBusqueda.data?.items || []
+      topJuegos = items.slice(0, 20).map((j) => ({
+        appId: j.id.toString(),
+        name: j.name,
+        capsule: j.tiny_image || null,
+      }))
+    }
 
-    // 2. Enriquecemos los 10 juegos en paralelo: solo 1 consulta por juego (resumen de
-    // reviews). Las imágenes usan la URL estándar de Steam con el appId, sin llamar a
-    // appdetails (antes eran 2 requests por juego, el doble de peticiones por búsqueda).
+    // 2. Enriquecemos los juegos en paralelo: solo 1 consulta por juego (resumen de
+    // reviews). El capsule viene de la búsqueda cuando existe; si no, URL estándar.
     const promesasEnriquecer = topJuegos.map(async (juego) => {
-      const appId = juego.id.toString()
-
-      // EL CAPSULE: Usamos directo el tiny_image que devuelve la búsqueda.
-      // Es el capsule_231x87.jpg real, con el hash correcto y no es la versión v5.
+      const appId = juego.appId
       const capsule_image =
-        juego.tiny_image ||
+        juego.capsule ||
         `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/capsule_231x87.jpg`
 
       try {

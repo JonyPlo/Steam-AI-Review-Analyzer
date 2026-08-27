@@ -2,37 +2,34 @@ import { useEffect, useState } from 'react'
 import { animate } from 'framer-motion'
 
 const SIZES = {
-  lg: { ring: 128, stroke: 10, text: 'text-4xl sm:text-5xl' },
-  md: { ring: 84, stroke: 8, text: 'text-2xl sm:text-3xl' },
+  lg: { text: 'text-[52px] sm:text-[60px]', gauge: 'w-full max-w-52' },
+  md: { text: 'text-[34px]', gauge: 'w-full max-w-32' },
 }
 
 /**
- * El % de reseñas positivas como marcador: anillo que se dibuja +
- * número con count-up. Es el momento "authored" de la vista de análisis.
+ * El % de reseñas positivas como número de sala: Archivo expanded
+ * dorado con count-up + barra que se llena. El primer dato que se
+ * lee en la placa de sala.
  */
 export default function PercentScore({ value, size = 'lg', label = 'positivas' }) {
   const cfg = SIZES[size]
   const [animated, setAnimated] = useState(0)
+  const [fill, setFill] = useState(0)
   const reduced =
     typeof window !== 'undefined' &&
     window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
-  const r = (cfg.ring - cfg.stroke) / 2
-  const circ = 2 * Math.PI * r
-  const targetOffset = circ * (1 - value / 100)
-  const [dashOffset, setDashOffset] = useState(circ)
-
   useEffect(() => {
-    if (reduced) return
-    // doble rAF: el primer paint pinta el anillo vacío, el siguiente
+    if (reduced) return // se resuelve en el render, sin estado
+    // doble rAF: el primer paint pinta la barra vacía, el siguiente
     // dispara la transición hacia el valor final
     let raf2
     const raf1 = requestAnimationFrame(() => {
-      raf2 = requestAnimationFrame(() => setDashOffset(targetOffset))
+      raf2 = requestAnimationFrame(() => setFill(value))
     })
     const controls = animate(0, value, {
       duration: 1.1,
-      ease: [0.16, 1, 0.3, 1],
+      ease: [0.22, 1, 0.36, 1],
       onUpdate: (v) => setAnimated(Math.round(v)),
     })
     return () => {
@@ -40,55 +37,27 @@ export default function PercentScore({ value, size = 'lg', label = 'positivas' }
       if (raf2) cancelAnimationFrame(raf2)
       controls.stop()
     }
-  }, [value, targetOffset, reduced])
+  }, [value, reduced])
 
   // Con reduced-motion no hay animación: se muestra el valor final directo
   const display = reduced ? value : animated
-  const dash = reduced ? targetOffset : dashOffset
+  const pct = reduced ? value : fill
 
   return (
     <div
-      className="relative shrink-0"
-      style={{ width: cfg.ring, height: cfg.ring }}
+      className="flex items-end gap-4 sm:gap-5"
       role="img"
       aria-label={`${value}% de reseñas ${label}`}
     >
-      <svg
-        width={cfg.ring}
-        height={cfg.ring}
-        viewBox={`0 0 ${cfg.ring} ${cfg.ring}`}
-        className="-rotate-90"
-      >
-        <circle
-          cx={cfg.ring / 2}
-          cy={cfg.ring / 2}
-          r={r}
-          fill="none"
-          stroke="var(--line)"
-          strokeWidth={cfg.stroke}
-        />
-        <circle
-          cx={cfg.ring / 2}
-          cy={cfg.ring / 2}
-          r={r}
-          fill="none"
-          stroke="var(--accent)"
-          strokeWidth={cfg.stroke}
-          strokeLinecap="round"
-          strokeDasharray={circ}
-          strokeDashoffset={dash}
-          style={
-            reduced
-              ? undefined
-              : { transition: 'stroke-dashoffset 1.1s cubic-bezier(0.16,1,0.3,1)' }
-          }
-        />
-      </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className={`score-num font-black leading-none text-ink ${cfg.text}`}>
-          {display}
-          <span className="text-[0.55em] font-bold align-super text-accent">%</span>
-        </span>
+      <span className={`font-display shrink-0 leading-none text-accent ${cfg.text}`}>
+        {display}
+        <span className="align-super text-[0.45em]">%</span>
+      </span>
+      <div className="min-w-0 flex-1 pb-1">
+        <div className={`gauge h-1.5 overflow-hidden ${cfg.gauge}`}>
+          <div className="gauge-fill h-full" style={{ transform: `scaleX(${pct / 100})` }} />
+        </div>
+        <p className="label mt-2.5 !text-[10px] text-muted">{label}</p>
       </div>
     </div>
   )

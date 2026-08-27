@@ -13,6 +13,11 @@ export function useTheme() {
     setTheme((t) => {
       const next = t === 'dark' ? 'light' : 'dark'
       document.documentElement.dataset.theme = next
+      // Mantener la barra del navegador acorde al tema
+      document.querySelector('meta[name="theme-color"]')?.setAttribute(
+        'content',
+        next === 'dark' ? '#141210' : '#f3f2ef',
+      )
       try {
         localStorage.setItem(KEY, next)
       } catch {

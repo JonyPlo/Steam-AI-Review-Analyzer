@@ -1,41 +1,45 @@
 @import 'tailwindcss';
 
 /* ============================================================
-   SCOREBOARD WORLD — tokens
-   Dark = noche, cuarto oscuro, la pantalla es la luz principal.
-   Light = gráficas de transmisión en un día claro.
+   MUSEO DE LA RESEÑA — tokens
+   Dark  = museo de noche: carbón cálido, lámparas sobre las
+           placas. El jugador decide la compra de noche, frente
+           a Steam.
+   Light = galería de día: papel de galería cálido, luz natural.
+   Un solo acento: oro antiguo (gilt). Hairlines de 1px como
+   única línea; el aire separa, no las reglas.
    ============================================================ */
 
 :root {
-  --bg: #f4f3ef;
-  --surface: #ffffff;
-  --raised: #eceae3;
-  --line: rgba(23, 27, 38, 0.12);
-  --ink: #171b26;
-  --muted: #5a6478;
-  --faint: #8a93a8;
-  --accent: #e06a28;
-  --pos: #128a54;
-  --neg: #d23a4a;
-  --mix: #a97510;
-  --glow: rgba(224, 106, 40, 0.07);
-  --grain-opacity: 0.03;
+  --bg: #f3f2ef;
+  --surface: #fbfaf8;
+  --raised: #e9e7e2;
+  --line: rgba(26, 21, 14, 0.16);
+  --ink: #191613;
+  --muted: #575149;
+  --faint: #6e675c;
+  --accent: #7d6128;
+  --accent-ink: #ffffff;
+  --pos: #1d7a4d;
+  --neg: #b03a30;
+  --mix: #8a6414;
+  --shadow: rgba(26, 21, 14, 0.18);
 }
 
 [data-theme='dark'] {
-  --bg: #0c0f16;
-  --surface: #121722;
-  --raised: #1a2130;
-  --line: rgba(148, 163, 199, 0.14);
-  --ink: #e8ecf4;
-  --muted: #98a2b8;
-  --faint: #5f6b84;
-  --accent: #ffb454;
-  --pos: #3dd68c;
-  --neg: #f45b69;
-  --mix: #ffc53d;
-  --glow: rgba(255, 180, 84, 0.07);
-  --grain-opacity: 0.05;
+  --bg: #141210;
+  --surface: #1b1917;
+  --raised: #232019;
+  --line: rgba(242, 238, 229, 0.13);
+  --ink: #f2eee5;
+  --muted: #a69c8c;
+  --faint: #8a8171;
+  --accent: #c9a96a;
+  --accent-ink: #1a150c;
+  --pos: #4ec28f;
+  --neg: #f07168;
+  --mix: #d9a94e;
+  --shadow: rgba(0, 0, 0, 0.55);
 }
 
 @theme inline {
@@ -47,6 +51,7 @@
   --color-muted: var(--muted);
   --color-faint: var(--faint);
   --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
   --color-pos: var(--pos);
   --color-neg: var(--neg);
   --color-mix: var(--mix);
@@ -64,42 +69,38 @@ body {
   font-family: var(--font-body);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  /* En escritorio el sello de Metacritic ancla su centro a la
+     esquina de la placa, 48px más allá del borde del contenedor:
+     24px asoma del viewport. Clip (no hidden: no crea contenedor
+     de scroll y el sticky sigue funcionando) en vez de scrollbar. */
+  overflow-x: clip;
 }
 
-/* Resplandor fijo superior: da profundidad sin ser neón */
-body::after {
-  content: '';
-  position: fixed;
-  top: -25vh;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 90vw;
-  height: 65vh;
-  background: radial-gradient(ellipse at center, var(--glow) 0%, transparent 70%);
-  pointer-events: none;
-  z-index: 0;
-}
+@layer base {
+  /* color-scheme: scrollbars y controles nativos siguen el tema */
+  :root {
+    color-scheme: light;
+  }
 
-/* Grano de película: textura sutil por encima de todo */
-body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 90;
-  opacity: var(--grain-opacity);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-}
+  [data-theme='dark'] {
+    color-scheme: dark;
+  }
 
-::selection {
-  background: var(--accent);
-  color: var(--bg);
-}
+  ::selection {
+    background: var(--accent);
+    color: var(--accent-ink);
+  }
 
-:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: 4px;
+  /* En @layer base para que las utilities puedan sobrescribirlo */
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  /* El anillo de foco del buscador vive en .search-shell (focus-within) */
+  input:focus-visible {
+    outline: none;
+  }
 }
 
 /* Scrollbar discreta, temática */
@@ -113,76 +114,239 @@ body::before {
 }
 *::-webkit-scrollbar-thumb {
   background: var(--faint);
-  border-radius: 8px;
+  border-radius: 0;
 }
 *::-webkit-scrollbar-track {
   background: transparent;
 }
 
-/* Números de marcador: Archivo expandido, tabulares */
-.score-num {
-  font-family: var(--font-display);
-  font-stretch: 115%;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -0.02em;
-}
+/* Componentes: en capa para que las utilities (hidden, !text-…)
+   puedan sobrescribirlos, como manda Tailwind. */
+@layer components {
 
-/* Overline: el único kicker del sistema */
-.overline {
+/* --- Display: Archivo expanded. Wordmark, títulos de sala,
+   numerales, nombres de catálogo. --- */
+.font-display {
   font-family: var(--font-display);
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  font-size: 11px;
+  font-stretch: 118%;
   font-weight: 700;
+  letter-spacing: 0.005em;
+  font-variant-numeric: tabular-nums;
 }
 
-/* Chip de semántica (positivo / negativo / mixto) */
+/* --- Label caps pequeña: el único kicker del sistema --- */
+.label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  line-height: 1.5;
+}
+
+/* --- Máscara de línea: los reveals suben como líneas de galería --- */
+.mask-line {
+  display: block;
+  overflow: hidden;
+}
+
+/* --- Buscador: mesa de visitas, hairline que se dora al foco --- */
+.search-shell {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+.search-shell:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 16%, transparent);
+}
+
+/* --- Botón primario: placa de oro --- */
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border: 1px solid transparent;
+  transition: transform 0.16s ease, filter 0.16s ease;
+}
+.btn-primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  filter: brightness(1.07);
+}
+.btn-primary:active:not(:disabled) {
+  transform: none;
+  filter: none;
+}
+.btn-primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* --- Chips de polaridad: esquinas nítidas, hairline --- */
 .chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 3px 10px;
-  font-size: 12px;
+  border-radius: 2px;
+  padding: 3px 9px;
+  font-size: 13px;
   font-weight: 600;
+  letter-spacing: 0.02em;
   white-space: nowrap;
 }
 .chip-pos {
   color: var(--pos);
-  border-color: color-mix(in oklab, var(--pos) 40%, transparent);
+  border-color: color-mix(in oklab, var(--pos) 45%, transparent);
   background: color-mix(in oklab, var(--pos) 10%, transparent);
 }
 .chip-neg {
   color: var(--neg);
-  border-color: color-mix(in oklab, var(--neg) 40%, transparent);
+  border-color: color-mix(in oklab, var(--neg) 45%, transparent);
   background: color-mix(in oklab, var(--neg) 10%, transparent);
 }
 .chip-mix {
   color: var(--mix);
-  border-color: color-mix(in oklab, var(--mix) 40%, transparent);
+  border-color: color-mix(in oklab, var(--mix) 45%, transparent);
   background: color-mix(in oklab, var(--mix) 10%, transparent);
 }
 
-/* Atajo de teclado */
+/* --- Atajo de teclado --- */
 .kbd {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 22px;
-  height: 22px;
+  min-width: 20px;
+  height: 20px;
   padding: 0 6px;
   border: 1px solid var(--line);
-  border-bottom-width: 2px;
-  border-radius: 6px;
+  border-radius: 2px;
   background: var(--surface);
   color: var(--muted);
-  font-family: var(--font-display);
   font-size: 11px;
   font-weight: 600;
+  box-shadow: inset 0 -1px 0 var(--line);
 }
 
-/* Skeleton para listados */
+/* --- Placa con doble marco (fotograma + cartela a 5px).
+   Reservada a la placa de sala y a las placas de veredicto. --- */
+.plate {
+  position: relative;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+.plate::after {
+  content: '';
+  position: absolute;
+  inset: 5px;
+  border: 1px solid var(--line);
+  pointer-events: none;
+}
+
+/* --- Placa de veredicto: la única superficie dorada de la sala --- */
+.verdict-plate {
+  position: relative;
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.verdict-plate::after {
+  content: '';
+  position: absolute;
+  inset: 5px;
+  border: 1px solid color-mix(in oklab, var(--accent-ink) 32%, transparent);
+  pointer-events: none;
+}
+
+/* --- Etiqueta de pared (comentario destacado) --- */
+.label-card {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  transition: border-color 0.18s ease, transform 0.18s ease;
+}
+.label-card:hover {
+  border-color: color-mix(in oklab, var(--ink) 32%, var(--line));
+  transform: translateY(-2px);
+}
+
+/* --- Ficha de catálogo (juego en el listado) --- */
+.sala-card {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  transition: border-color 0.18s ease, transform 0.18s ease;
+}
+.sala-card:hover {
+  border-color: color-mix(in oklab, var(--ink) 32%, var(--line));
+  transform: translateY(-2px);
+}
+.sala-card .sala-img {
+  transition: transform 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.sala-card:hover .sala-img {
+  transform: scale(1.03);
+}
+
+/* --- Obra expuesta: la única sombra de pared (offset + blur).
+   Lleva el paspartú del sistema: cartela interior a 5px, como la placa. --- */
+.exhibit-frame {
+  position: relative;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: 0 24px 48px -22px var(--shadow);
+}
+.exhibit-frame::after {
+  content: '';
+  position: absolute;
+  inset: 5px;
+  border: 1px solid var(--line);
+  pointer-events: none;
+}
+
+/* --- Barra medidora del % (track + relleno dorado) --- */
+.gauge {
+  background: var(--raised);
+  border: 1px solid var(--line);
+}
+.gauge-fill {
+  background: var(--accent);
+  width: 100%;
+  transform: scaleX(0);
+  transform-origin: 0 50%;
+  transition: transform 1s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* --- Sello de Metacritic: la marca circular que flota sobre la
+   punta de la placa. Doble anillo (el doble marco del sistema,
+   redondeado) + sombra de sello; al hover se dora. --- */
+.seal {
+  border-radius: 9999px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  box-shadow: 0 14px 30px -14px var(--shadow);
+  transition: border-color 0.18s ease, transform 0.18s ease;
+}
+.seal::after {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  border: 1px solid var(--line);
+  border-radius: 9999px;
+  pointer-events: none;
+  transition: border-color 0.18s ease;
+}
+.seal:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+.seal:hover::after {
+  border-color: color-mix(in oklab, var(--accent) 50%, transparent);
+}
+
+/* --- Dropdown: la única sombra flotante, con offset + blur --- */
+.dropdown-panel {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: 0 18px 44px -16px var(--shadow);
+}
+
+/* --- Skeleton para listados --- */
 @keyframes shimmer {
   0% {
     background-position: -400px 0;
@@ -202,15 +366,95 @@ body::before {
   animation: shimmer 1.4s infinite linear;
 }
 
-/* Barra de progreso en carga (análisis) */
+/* --- Barra de progreso en carga (análisis): el dorado recorre --- */
 @keyframes progressSlide {
   0% {
-    transform: translateX(-100%);
+    transform: translateX(-120%);
   }
   100% {
-    transform: translateX(350%);
+    transform: translateX(420%);
   }
 }
 .progress-run {
+  background: var(--accent);
   animation: progressSlide 1.6s infinite cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* --- Marcas de colección del vestíbulo: entran en cascada --- */
+@keyframes markIn {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.mark-dot {
+  opacity: 0;
+  animation: markIn 0.35s ease-out forwards;
+}
+
+/* --- Pared que respira del vestíbulo: frames que flotan --- */
+@keyframes muroFloat {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
+}
+.muro-frame {
+  animation: muroFloat 7s ease-in-out infinite;
+}
+}
+
+/* Reduced motion: nada en bucle, nada en cascada */
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+  }
+  .progress-run {
+    animation: none;
+    width: 100%;
+    transform: none;
+  }
+  .mark-dot {
+    animation: none;
+    opacity: 1;
+  }
+  .muro-frame {
+    animation: none;
+  }
+  .gauge-fill {
+    transition: none;
+  }
+}
+
+/* --- Legibilidad (rediseño #3): el microtexto sube un paso.
+   Overrides de las utilidades de tamaño chico de Tailwind; fuera
+   de capa para ganar la cascada (incluida la variante `!`).
+   Solo font-size: cada clase conserva su line-height original. --- */
+.text-xs {
+  font-size: 13px !important;
+}
+.text-sm {
+  font-size: 15px !important;
+}
+.text-\[9px\] {
+  font-size: 11px !important;
+}
+.text-\[10px\] {
+  font-size: 12px !important;
+}
+.text-\[11px\] {
+  font-size: 13px !important;
+}
+.text-\[13px\] {
+  font-size: 14px !important;
+}
+.text-\[15px\] {
+  font-size: 16px !important;
 }

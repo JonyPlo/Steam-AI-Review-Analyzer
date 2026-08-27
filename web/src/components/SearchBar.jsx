@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
+import { motion, useReducedMotion } from 'framer-motion'
 import { Search, X, ChevronRight, Loader2 } from 'lucide-react'
+import { traducirReview } from '../i18n'
 
 function formatearCompacto(n) {
   if (!n) return ''
@@ -8,10 +10,10 @@ function formatearCompacto(n) {
 
 function chipSemantica(desc) {
   if (!desc) return { cls: 'chip !text-faint', label: 'Sin reseñas' }
-  if (desc === 'Mixed') return { cls: 'chip chip-mix', label: desc }
-  if (desc.includes('Negative')) return { cls: 'chip chip-neg', label: desc }
-  if (desc.includes('Positive')) return { cls: 'chip chip-pos', label: desc }
-  return { cls: 'chip !text-faint', label: desc }
+  if (desc === 'Mixed') return { cls: 'chip chip-mix', label: traducirReview(desc) }
+  if (desc.includes('Negative')) return { cls: 'chip chip-neg', label: traducirReview(desc) }
+  if (desc.includes('Positive')) return { cls: 'chip chip-pos', label: traducirReview(desc) }
+  return { cls: 'chip !text-faint', label: traducirReview(desc) }
 }
 
 /**
@@ -24,6 +26,7 @@ export default function SearchBar({ value, onChange, juegos, onPick, onSubmit, c
   const [selectedIndex, setSelectedIndex] = useState(-1)
   const containerRef = useRef(null)
   const inputRef = useRef(null)
+  const reduced = useReducedMotion()
   const minChars = 3
 
   // Si llegan resultados nuevos, reinicio la selección (ajuste en render,
@@ -59,6 +62,7 @@ export default function SearchBar({ value, onChange, juegos, onPick, onSubmit, c
       }
       return
     }
+    if (juegos.length === 0) return // sin resultados, no hay nada que mover
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       setOpen(true)
@@ -84,7 +88,8 @@ export default function SearchBar({ value, onChange, juegos, onPick, onSubmit, c
   }
 
   const padY = compact ? 'py-2.5 sm:py-3' : 'py-3.5 sm:py-5'
-  const textCls = compact ? 'text-sm sm:text-base' : 'text-base sm:text-lg'
+  const textCls = compact ? 'text-sm sm:text-base' : 'text-base sm:text-xl'
+  const btnPad = compact ? 'px-4 py-2' : 'px-5 py-2.5 sm:px-7'
 
   return (
     <div ref={containerRef} className="relative w-full">
@@ -97,8 +102,8 @@ export default function SearchBar({ value, onChange, juegos, onPick, onSubmit, c
         role="search"
       >
         <div
-          className={`flex items-center gap-2 rounded-xl border bg-surface pr-2 transition-colors focus-within:border-accent/60 ${
-            open ? 'border-accent/40' : 'border-line'
+          className={`search-shell flex w-full items-center gap-2 pr-2 ${
+            open ? 'border-accent' : ''
           } ${compact ? 'pl-3' : 'pl-4 sm:pl-5'}`}
         >
           <Search
@@ -127,7 +132,9 @@ export default function SearchBar({ value, onChange, juegos, onPick, onSubmit, c
             aria-expanded={visible}
             aria-controls={listId}
             aria-autocomplete="list"
-            aria-activedescendant={selectedIndex >= 0 ? `search-opt-${selectedIndex}` : undefined}
+            aria-activedescendant={
+              visible && selectedIndex >= 0 ? `search-opt-${selectedIndex}` : undefined
+            }
             className={`w-full min-w-0 bg-transparent text-ink placeholder:text-faint focus:outline-none ${padY} ${textCls}`}
           />
           {searching && visible && (
@@ -138,7 +145,7 @@ export default function SearchBar({ value, onChange, juegos, onPick, onSubmit, c
               type="button"
               onClick={clear}
               aria-label="Limpiar búsqueda"
-              className="shrink-0 rounded-md p-1.5 text-faint transition-colors hover:bg-raised hover:text-ink"
+              className="shrink-0 border p-1.5 text-faint transition-colors hover:border-line hover:text-ink"
             >
               <X size={16} />
             </button>
@@ -146,21 +153,22 @@ export default function SearchBar({ value, onChange, juegos, onPick, onSubmit, c
           <button
             type="submit"
             disabled={value.trim().length < minChars}
-            className={`score-num shrink-0 rounded-lg bg-accent font-bold uppercase tracking-wide text-bg transition-all hover:brightness-110 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 ${
-              compact ? 'px-3.5 py-2 text-xs' : 'px-5 sm:px-7 text-sm'
-            }`}
+            className={`btn-primary label shrink-0 ${btnPad}`}
           >
             Buscar
           </button>
         </div>
 
-        {/* Dropdown */}
+        {/* Dropdown: índice compacto, pegado al recuadro */}
         {visible && (juegos.length > 0 || searching) && (
-          <div
+          <motion.div
             id={listId}
             role="listbox"
             aria-label="Sugerencias de juegos"
-            className="absolute top-full z-50 mt-2 max-h-[60vh] w-full overflow-y-auto rounded-xl border border-line bg-surface shadow-2xl"
+            initial={reduced ? false : { opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.18, ease: 'easeOut' }}
+            className="dropdown-panel absolute top-full z-50 max-h-[60vh] w-full overflow-y-auto"
           >
             {searching && juegos.length === 0 && (
               <div className="flex items-center gap-2 px-4 py-3.5 text-sm text-muted">
@@ -176,6 +184,7 @@ export default function SearchBar({ value, onChange, juegos, onPick, onSubmit, c
                   id={`search-opt-${idx}`}
                   type="button"
                   role="option"
+                  tabIndex={-1}
                   aria-selected={idx === selectedIndex}
                   onMouseEnter={() => setSelectedIndex(idx)}
                   onClick={() => onPick(juego)}
@@ -186,12 +195,12 @@ export default function SearchBar({ value, onChange, juegos, onPick, onSubmit, c
                   <img
                     src={juego.capsule_image}
                     alt=""
-                    className="h-10 w-[84px] shrink-0 rounded-md border border-line object-cover sm:h-12 sm:w-[100px]"
+                    className="h-10 w-[84px] shrink-0 border border-line object-cover sm:h-12 sm:w-[100px]"
                     loading="lazy"
                   />
                   <span className="min-w-0 flex-1">
                     <span
-                      className={`block truncate text-sm font-semibold sm:text-[15px] ${
+                      className={`font-display block truncate text-sm font-bold tracking-tight sm:text-[15px] ${
                         idx === selectedIndex ? 'text-accent' : 'text-ink'
                       }`}
                     >
@@ -214,7 +223,7 @@ export default function SearchBar({ value, onChange, juegos, onPick, onSubmit, c
                 </button>
               )
             })}
-          </div>
+          </motion.div>
         )}
       </form>
     </div>
