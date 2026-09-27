@@ -82,6 +82,27 @@ function parsearResultadosSteam(html) {
   return filas
 }
 
+// FUNCIÓN AUXILIAR: extrae el `data` de una respuesta de /api/appdetails.
+// OJO (cambio de Steam, 2026): para juegos registrados recientemente la
+// respuesta NO viene keyeada por el appid pedido, sino por un id interno
+// distinto (ej.: appids=3764200 responde con la clave "4460240", pero
+// adentro data.steam_appid=3764200). Por eso NO se lee res.data[appId] a
+// ciegas: se matchea por data.steam_appid, que siempre es el id real. Los
+// juegos viejos siguen keyeados por el id pedido y ese match también los
+// cubre. Si no matchea nadie pero hay una sola entrada con success=true,
+// usamos esa: estas llamadas se hacen de a 1 appid por request, no hay
+// ambigüedad.
+function tomarDetailsAppdetails(respuesta, appId) {
+  const cuerpo = respuesta?.data || {}
+  const entradas = Object.values(cuerpo)
+  const match = entradas.find(
+    (e) => e?.success && Number(e?.data?.steam_appid) === Number(appId),
+  )
+  if (match) return match.data || {}
+  const unica = entradas.find((e) => e?.success)
+  return unica?.data || {}
+}
+
 app.get('/buscar', async (req, res) => {
   const { name } = req.query
   if (!name) return res.json([])
@@ -136,7 +157,8 @@ app.get('/buscar', async (req, res) => {
           .catch(() => null),
       ])
 
-      const details = resDetails?.data?.[appId]?.data || {}
+      // La clave del JSON no siempre es el appid pedido (ver helper).
+      const details = tomarDetailsAppdetails(resDetails, appId)
       const summary = resSummary?.data?.query_summary || {}
 
       return {
@@ -763,7 +785,8 @@ app.get('/analizar/:appId', async (req, res) => {
       obtenerResenasFiltradas(appId, { dayRange: null }),
     ])
 
-    const appDetailsData = resAppDetails.data?.[appId]?.data || {}
+    // La clave del JSON no siempre es el appid pedido (ver helper).
+    const appDetailsData = tomarDetailsAppdetails(resAppDetails, appId)
     const headerImage = appDetailsData.header_image || ''
     const capsuleImageV5 = appDetailsData.capsule_imagev5 || ''
     const metacritic = appDetailsData.metacritic || {}
