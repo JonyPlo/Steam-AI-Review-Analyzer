@@ -170,7 +170,10 @@ app.get('/buscar', async (req, res) => {
         header_image:
           details.header_image ||
           `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/header.jpg`,
+        // El dropdown prefiere `capsule_image` (231×87) sobre `capsule_imagev5`
+        // (184×69): un poquito más nítida en el mismo espacio.
         capsule_image:
+          details.capsule_image ||
           details.capsule_imagev5 ||
           `https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/${appId}/capsule_231x87.jpg`,
         total_reviews: summary.total_reviews || 0,
@@ -788,7 +791,14 @@ app.get('/analizar/:appId', async (req, res) => {
     // La clave del JSON no siempre es el appid pedido (ver helper).
     const appDetailsData = tomarDetailsAppdetails(resAppDetails, appId)
     const headerImage = appDetailsData.header_image || ''
-    const capsuleImageV5 = appDetailsData.capsule_imagev5 || ''
+    // Fondo del wash de la sala (la pared difuminada de arriba): prefiere
+    // `background_raw` (1438×810) — a 1438 px de ancho aguanta el escalado a
+    // todo el viewport sin verse suave; los juegos viejos que no la traen
+    // caen al header (460 px, el mismo fallback de siempre).
+    const fondoSala = appDetailsData.background_raw || appDetailsData.header_image || ''
+    // El campo se llama capsule_imagev5 por el contrato, pero prefiere
+    // capsule_image (231×87): un poquito más nítida que la v5 (184×69).
+    const capsuleImageV5 = appDetailsData.capsule_image || appDetailsData.capsule_imagev5 || ''
     const metacritic = appDetailsData.metacritic || {}
     // Si el juego no existe en Steam, appdetails no trae data: 404 directo
     if (!appDetailsData.name) {
@@ -822,6 +832,7 @@ app.get('/analizar/:appId', async (req, res) => {
       appId: appId,
       name: nombreJuego,
       header_image: headerImage,
+      fondoSala: fondoSala,
       capsule_imagev5: capsuleImageV5,
       metacritic: {
         score: metacritic.score ?? null,
