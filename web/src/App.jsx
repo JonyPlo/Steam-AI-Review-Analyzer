@@ -401,30 +401,22 @@ function MuroTexto({
 }
 
 /* Card de la grilla de inicio: muestra la MISMA imagen que la
-   portada de la sala (header de alta calidad). Los headers de
-   Steam no declaran su tamaño en la URL, así que al cargar se lee
-   la proporción real y se ajusta el contenedor: la obra siempre
-   entera, sin recortes. */
+   portada de la sala. El contenedor queda FIJO en 21:10 (la forma
+   clásica de los headers): si la imagen no la tiene (ej.: la raw a
+   16:9) se recorta levemente por arriba/abajo, sin estirar nada. */
 function RecienteCard({ j, onOpen }) {
-  const [ratio, setRatio] = useState(null)
   return (
     <button
       type="button"
       onClick={() => onOpen(j.appId)}
       className="sala-card group overflow-hidden text-left"
     >
-      <div className="overflow-hidden bg-raised" style={{ aspectRatio: ratio || '16 / 9' }}>
+      <div className="overflow-hidden bg-raised" style={{ aspectRatio: '460 / 215' }}>
         {j.img && (
           <img
             src={j.img}
             alt=""
             loading="lazy"
-            onLoad={(e) => {
-              const el = e.currentTarget
-              if (el.naturalWidth && el.naturalHeight) {
-                setRatio(`${el.naturalWidth} / ${el.naturalHeight}`)
-              }
-            }}
             onError={(e) => {
               e.currentTarget.style.display = 'none'
             }}
@@ -444,14 +436,13 @@ function RecienteCard({ j, onOpen }) {
   )
 }
 
-/* Card del catálogo (resultados de búsqueda): la MISMA imagen de alta
-   calidad que la grilla de inicio (header de /buscar, con cápsula de
-   respaldo) y el MISMO contenedor: 16:9 que, al cargar, adopta la
-   proporción nativa de la imagen — la obra siempre entera, nunca se
-   corta, y como todos los headers de Steam son 1920×1080, todas las
-   cards miden igual y los chips quedan alineados. */
+/* Card del catálogo (resultados de búsqueda): la MISMA imagen que la
+   grilla de inicio y la portada de la sala. El contenedor queda FIJO
+   en 21:10 (la forma clásica de los headers): todas las cards miden
+   igual, los chips quedan alineados y la placa de la sala no se
+   estira. Si la imagen no es 21:10 (ej.: la raw a 16:9) se recorta
+   levemente por arriba/abajo. */
 function CatalogoCard({ juego, idx, onOpen, reduced }) {
-  const [ratio, setRatio] = useState(null)
   return (
     <motion.button
       type="button"
@@ -466,17 +457,11 @@ function CatalogoCard({ juego, idx, onOpen, reduced }) {
       className="sala-card group flex h-full flex-col text-left"
     >
       <span className="relative block w-full overflow-hidden border-b border-line">
-        <span className="block w-full overflow-hidden bg-raised" style={{ aspectRatio: ratio || '16 / 9' }}>
+        <span className="block w-full overflow-hidden bg-raised" style={{ aspectRatio: '460 / 215' }}>
           <img
             src={juego.header_image || juego.capsule_image}
             alt=""
             loading="lazy"
-            onLoad={(e) => {
-              const el = e.currentTarget
-              if (el.naturalWidth && el.naturalHeight) {
-                setRatio(`${el.naturalWidth} / ${el.naturalHeight}`)
-              }
-            }}
             onError={(e) => {
               e.currentTarget.style.display = 'none'
             }}
@@ -600,9 +585,6 @@ export default function App() {
   const [loadingAnalysis, setLoadingAnalysis] = useState(false)
   const [analysisError, setAnalysisError] = useState(null)
   const [lastAppId, setLastAppId] = useState(null)
-  // Proporción nativa de la portada (se lee del image al cargar): Steam
-  // no siempre entrega headers 16:9. Se resetea al abrir cada sala.
-  const [ratioPortada, setRatioPortada] = useState(null)
 
   /* Visitas recientes del cache local: se recalculan al entrar al vestíbulo */
   const recientes = useMemo(() => (view === 'inicio' ? leerRecientes(6) : []), [view])
@@ -697,7 +679,6 @@ export default function App() {
       setQuery('')
       setAnalisisData(null)
       setAnalysisError(null)
-      setRatioPortada(null)
       setLastAppId(appId)
       setView('analisis')
 
@@ -731,10 +712,13 @@ export default function App() {
     setView('inicio')
     setAnalisisData(null)
     setAnalysisError(null)
-    setRatioPortada(null)
   }
 
   const meta = analisisData?.metaCard
+  // Fondo del wash: la `background_raw` de alta resolución cuando el juego
+  // la trae (nítida aunque se escale a todo el viewport); si no, el header
+  // de la portada, que es lo que usaba el wash de siempre.
+  const washImage = meta?.fondoSala || meta?.header_image
   const allReviews = meta?.allReviews
 
   // Transición de vistas: abrir la siguiente sala (fade + rise, corto)
@@ -778,19 +762,22 @@ export default function App() {
 
       {/* CONTENIDO */}
       <main className="relative z-10 flex-1">
-        {/* Wash de la sala: el cover difuminado como luz de pared,
-            fundiéndose hacia abajo con el fondo. */}
-        {view === 'analisis' && meta?.header_image && (
+        {/* Wash de la sala: el fondo del juego (fondoSala, alta resolución)
+            al 35% de opacidad y con un blur de 10 px. Cubre la pantalla
+            entera (hasta el borde inferior del viewport) y recién en el
+            último tercio empieza a fundirse con el fondo, apagándose por
+            completo justo en el borde de abajo. */}
+        {view === 'analisis' && washImage && (
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-[480px] overflow-hidden sm:h-[560px]"
+            className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-[calc(100vh-3.5rem)] overflow-hidden"
           >
             <img
-              src={meta.header_image}
+              src={washImage}
               alt=""
-              className="h-full w-full scale-110 object-cover object-top opacity-[0.14] blur-2xl dark:opacity-25"
+              className="h-full w-full scale-110 object-cover object-top opacity-35 blur-[10px]"
             />
-            <div className="absolute inset-0 bg-gradient-to-b from-transparent via-bg/60 to-bg" />
+            <div className="absolute inset-0 bg-gradient-to-b from-transparent from-[60%] to-bg" />
           </div>
         )}
         <AnimatePresence mode="wait">
@@ -1029,10 +1016,12 @@ export default function App() {
 
                     <div className="mt-7 grid grid-cols-1 gap-8 lg:grid-cols-12 lg:gap-10">
                       {/* La obra: portada enmarcada, se asienta lentamente.
-                          La proporción es la NATIVA del header (Steam no
-                          siempre entrega 16:9: hay headers de 460×215). Se
-                          lee del image al cargar (CSS var) para que la
-                          portada nunca se corte por los lados. */}
+                          El contenedor queda FIJO en 21:10 (la forma
+                          clásica de los headers): la placa de la derecha
+                          no se estira, y con una imagen a 16:9 (la raw)
+                          el recorte por arriba/abajo es leve. Si la
+                          fuente vuelve a ser header_image (21:10), la
+                          obra queda entera, igual que antes. */}
                       <motion.div
                         initial={reduced ? false : { opacity: 0 }}
                         animate={{ opacity: 1 }}
@@ -1041,7 +1030,7 @@ export default function App() {
                       >
                         <div
                           className="exhibit-frame overflow-hidden lg:h-full"
-                          style={{ '--portada-ratio': ratioPortada || '16 / 9' }}
+                          style={{ '--portada-ratio': '460 / 215' }}
                         >
                           <motion.img
                             src={meta.header_image}
@@ -1049,13 +1038,7 @@ export default function App() {
                             initial={reduced ? false : { scale: 1.04 }}
                             animate={{ scale: 1 }}
                             transition={{ duration: 0.9, ease: EASE }}
-                            onLoad={(e) => {
-                              const el = e.currentTarget
-                              if (el.naturalWidth && el.naturalHeight) {
-                                setRatioPortada(`${el.naturalWidth} / ${el.naturalHeight}`)
-                              }
-                            }}
-                            className="aspect-[var(--portada-ratio)] w-full object-contain lg:aspect-auto lg:h-full"
+                            className="aspect-[var(--portada-ratio)] w-full object-cover lg:h-full"
                           />
                         </div>
                       </motion.div>
