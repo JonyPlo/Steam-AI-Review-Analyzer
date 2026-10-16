@@ -56,6 +56,11 @@ import { useTheme } from './theme'
 // En producción se puede apuntar a otra base con VITE_API_BASE.
 const API_BASE = import.meta.env.VITE_API_BASE || '/api'
 const CACHE_TTL = 3 * 24 * 60 * 60 * 1000
+// Versión 2 del esquema de caché de análisis: las entradas nuevas traen
+// releaseDate/daysSinceRelease/showHistorical (decide si el panel histórico
+// aplica). El cambio de prefijo hace que las entradas viejas (analisis_*)
+// se ignoren sin migración.
+const ANALISIS_CACHE_PREFIX = 'analisis2_'
 const EASE = [0.22, 1, 0.36, 1]
 
 /* ---------- helpers ---------- */
@@ -89,14 +94,14 @@ function obtenerDeCache(clave) {
 }
 
 /* Visitas ya registradas en el navegador: el cache de análisis.
-   Recorre las claves analisis_*, descarta vencidas (TTL) y
+   Recorre las claves del prefijo vigente, descarta vencidas (TTL) y
    devuelve las más recientes con lo justo para la ficha. */
 function leerRecientes(limite = 6) {
   try {
     const visitas = []
     for (const clave of Object.keys(localStorage)) {
-      if (!clave.startsWith('analisis_')) continue
-      const appId = Number(clave.slice('analisis_'.length))
+      if (!clave.startsWith(ANALISIS_CACHE_PREFIX)) continue
+      const appId = Number(clave.slice(ANALISIS_CACHE_PREFIX.length))
       if (!Number.isFinite(appId)) continue
       try {
         const item = JSON.parse(localStorage.getItem(clave))
@@ -136,6 +141,35 @@ function chipSemantica(desc) {
   if (desc.includes('Negative')) return 'chip chip-neg'
   if (desc.includes('Positive')) return 'chip chip-pos'
   return 'chip !text-faint'
+}
+
+/* ¿El juego cruzó los 30 días desde que la entrada de caché se guardó?
+   Si la guardada dice showHistorical=false (solo Panel I) y ahora ya
+   corresponden ambos paneles, la entrada está desactualizada: se trata
+   como un miss y se vuelve a pedir el análisis. Sin esta regla el panel
+   histórico no aparecería hasta que venza el TTL de 3 días. Sin
+   releaseDate no hay forma de recalcular: se confía en el TTL. */
+function entradaCruzo30Dias(data) {
+  if (data?.showHistorical !== false) return false
+  if (!data?.releaseDate) return false
+  const fecha = Date.parse(data.releaseDate)
+  if (!Number.isFinite(fecha)) return false
+  const ahora = new Date()
+  const hoyUtc = Date.UTC(ahora.getUTCFullYear(), ahora.getUTCMonth(), ahora.getUTCDate())
+  // releaseDate es medianoche UTC: la resta en días es exacta
+  return Math.round((hoyUtc - fecha) / (24 * 60 * 60 * 1000)) > 30
+}
+
+/* Subtítulo del Panel I cuando el histórico no aplica (juego con
+   <=30 días): la edad del juego. Sin fecha (null), aún sin lanzar
+   (negativo) o días inválidos → sin subtítulo: no se afirma "salió"
+   sin una fecha real, y menos se muestra "NaN días". */
+function subtituloLanzamiento(data) {
+  const dias = data?.daysSinceRelease
+  if (typeof dias !== 'number' || !Number.isFinite(dias) || dias < 0) return null
+  if (dias === 0) return 'Salió hoy'
+  if (dias === 1) return 'Salió ayer'
+  return `Salió hace ${dias} días`
 }
 
 /* ---------- UI atómica ---------- */
@@ -326,6 +360,8 @@ function MuroTexto({
   numeral,
   kicker,
   titulo,
+  subtitulo = null,
+  notaLanzamiento = null,
   resumen,
   etiquetas,
   cierre,
@@ -354,6 +390,19 @@ function MuroTexto({
         <div className="min-w-0 pt-1 sm:pt-1.5">
           <Label>{kicker}</Label>
           <h3 className="font-display mt-1 text-2xl tracking-tight text-ink sm:text-3xl">{titulo}</h3>
+          {/* Solo cuando el histórico no aplica (juego joven): la edad del
+              juego y, debajo, la nota discreta de que el histórico se suma
+              al cumplir 30 días. Sin fecha de lanzamiento: sin subtítulo. */}
+          {(subtitulo || notaLanzamiento) && (
+            <div className="mt-1.5">
+              {subtitulo && (
+                <p className="text-sm leading-snug text-muted">{subtitulo}</p>
+              )}
+              {notaLanzamiento && (
+                <p className="mt-0.5 text-xs leading-relaxed text-faint">{notaLanzamiento}</p>
+              )}
+            </div>
+          )}
         </div>
       </header>
 
@@ -593,6 +642,19 @@ export default function App() {
     window.scrollTo(0, 0)
   }, [view])
 
+  /* Entrada de análisis del esquema v1 (analisis_*) quedaron obsoletas con
+     el cambio a analisis2_ (ahora traen la fecha de lanzamiento). Se
+     limpian una sola vez al montar, sin tocar otra clave de storage. */
+  useEffect(() => {
+    try {
+      for (const clave of Object.keys(localStorage)) {
+        if (/^analisis_\d+$/.test(clave)) localStorage.removeItem(clave)
+      }
+    } catch {
+      /* sin acceso a storage: no hay nada que limpiar */
+    }
+  }, [])
+
   /* Búsqueda en vivo (debounce 400ms, mínimo 3 caracteres) */
   useEffect(() => {
     const q = query.trim()
@@ -682,8 +744,18 @@ export default function App() {
       setLastAppId(appId)
       setView('analisis')
 
-      const cacheKey = `analisis_${appId}`
-      const data = obtenerDeCache(cacheKey)
+      const cacheKey = `${ANALISIS_CACHE_PREFIX}${appId}`
+      let data = obtenerDeCache(cacheKey)
+      // El juego cruzó los 30 días desde que la entrada se guardó: el
+      // histórico ya corresponde y la caché queda invalidada (miss).
+      if (data && entradaCruzo30Dias(data)) {
+        try {
+          localStorage.removeItem(cacheKey)
+        } catch {
+          /* sin acceso a storage: se re-pide igual y se reescribe la clave */
+        }
+        data = null
+      }
       if (data) {
         setAnalisisData(data)
         return
@@ -715,6 +787,11 @@ export default function App() {
   }
 
   const meta = analisisData?.metaCard
+  // El histórico no aplica cuando el juego tiene <=30 días (o no tiene
+  // fecha y las reseñas decidieron que no aporta nada). Si el campo no
+  // existe (no debería pasar con el esquema v2), se muestran los dos
+  // paneles: el comportamiento actual.
+  const soloRecientes = analisisData?.showHistorical === false
   // Fondo del wash: la `background_raw` de alta resolución cuando el juego
   // la trae (nítida aunque se escale a todo el viewport); si no, el header
   // de la portada, que es lo que usaba el wash de siempre.
@@ -1094,30 +1171,42 @@ export default function App() {
                     </div>
                   </section>
 
-                  {/* Los dos muros de texto: I (30 días, sus 2 etiquetas) y
-                      II (historial, sus 2 etiquetas). El 2+2 es sagrado. */}
+                  {/* Muros de texto: I (30 días, sus 2 etiquetas) y II
+                      (historial, sus 2 etiquetas). El 2+2 es sagrado cuando
+                      ambos aplican; en un juego con <=30 días el histórico
+                      no existe todavía y solo se monta el Panel I, que
+                      ocupa la sala a su ancho natural (stack vertical, como
+                      siempre: ningún panel queda a media fila). */}
                   <section className="mx-auto flex w-full max-w-7xl flex-col gap-10 px-4 pb-20 pt-2 sm:px-6 sm:gap-12">
                     <MuroTexto
                       numeral="I"
-                      kicker="Últimos 30 días"
+                      kicker={soloRecientes ? 'Desde el lanzamiento' : 'Últimos 30 días'}
                       titulo="Lo que dice el público hoy"
+                      subtitulo={soloRecientes ? subtituloLanzamiento(analisisData) : null}
+                      notaLanzamiento={
+                        soloRecientes
+                          ? 'El análisis histórico se suma cuando el juego cumple 30 días.'
+                          : null
+                      }
                       resumen={analisisData.resumenTecnico}
                       etiquetas={analisisData.destacadosRecientes}
                       cierre={analisisData.cierreRecientes}
                       nota="Basado en las reseñas de los últimos 30 días de Steam."
                       reduced={reduced}
                     />
-                    <MuroTexto
-                      numeral="II"
-                      kicker="Historial completo"
-                      titulo="Lo mejor valorado de siempre"
-                      resumen={analisisData.resumenGeneral}
-                      etiquetas={analisisData.destacadosHistoricos}
-                      cierre={analisisData.cierreHistoricos}
-                      nota="Basado en las reseñas más valoradas de toda la vida del juego."
-                      delay={0.12}
-                      reduced={reduced}
-                    />
+                    {!soloRecientes && (
+                      <MuroTexto
+                        numeral="II"
+                        kicker="Historial completo"
+                        titulo="Lo mejor valorado de siempre"
+                        resumen={analisisData.resumenGeneral}
+                        etiquetas={analisisData.destacadosHistoricos}
+                        cierre={analisisData.cierreHistoricos}
+                        nota="Basado en las reseñas más valoradas de toda la vida del juego."
+                        delay={0.12}
+                        reduced={reduced}
+                      />
+                    )}
                   </section>
                 </>
               ) : null}
