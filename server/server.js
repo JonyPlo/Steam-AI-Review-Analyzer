@@ -3,6 +3,14 @@ import axios from 'axios'
 import 'dotenv/config'
 import Groq from 'groq-sdk' // Importamos el SDK de Groq
 
+// Helpers puros de fecha de lanzamiento (módulo aparte para poder
+// probarlos con node:test sin levantar el server; ver fechaLanzamiento.js)
+import {
+  parseSteamReleaseDate,
+  diasDesdeLanzamiento,
+  muestraHistoricaAporta,
+} from './fechaLanzamiento.js'
+
 const GROQ_API_KEY = process.env.GROQ_API_KEY
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY
 const IGDB_CLIENT_ID = process.env.IGDB_CLIENT_ID
@@ -14,7 +22,7 @@ const groq = GROQ_API_KEY ? new Groq({ apiKey: GROQ_API_KEY }) : null
 const app = express()
 const PORT = process.env.PORT || 3001
 
-app.use((req, res, next) => {
+app.use((_req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*')
   res.header(
     'Access-Control-Allow-Headers',
@@ -766,26 +774,18 @@ app.get('/analizar/:appId', async (req, res) => {
     // Este resumen oficial (miles de reseñas de TODA la vida del juego) es el que ya se
     // mostraba arriba en la tarjeta, y ahora también alimenta el cierre de "históricos".
     const urlMetaGeneral = `https://store.steampowered.com/appreviews/${appId}?json=1&filter=all&language=all&num_per_page=0`
-    const urlAppDetails = `https://store.steampowered.com/api/appdetails?appids=${appId}`
+    // l=english a propósito: el release_date llega con formato estable
+    // ("3 Oct, 2026") sin depender del locale default de Steam; el resto de
+    // los campos que usamos de appdetails (nombre, imágenes, metacritic)
+    // son independientes del idioma.
+    const urlAppDetails = `https://store.steampowered.com/api/appdetails?appids=${appId}&l=english`
 
-    // 2. TRAEMOS RESEÑAS YA FILTRADAS: se pide de a 100, filtrando basura y longitud
-    // (≤ 400 caracteres en el original) sobre la marcha, hasta juntar 150 candidatas válidas
-    // por columna (o hasta agotar las reseñas del juego, típico de indies/juegos nuevos).
-    // "Recientes" además exige que la reseña sea de los últimos 30 días.
-    const limiteRecientes = Math.floor(Date.now() / 1000) - SEGUNDOS_30_DIAS
-    const [
-      resMetaGeneral,
-      resAppDetails,
-      listaRecientesFiltrada,
-      listaHistoricasFiltrada,
-    ] = await Promise.all([
+    // La metadata va primero: la fecha de lanzamiento decide si el panel
+    // histórico aplica y, por tanto, si vale la pena pedirle a Steam la
+    // muestra histórica y gastar la segunda llamada de IA.
+    const [resMetaGeneral, resAppDetails] = await Promise.all([
       axios.get(urlMetaGeneral),
       axios.get(urlAppDetails),
-      obtenerResenasFiltradas(appId, {
-        dayRange: 30,
-        filtroAdicional: (r) => r.timestamp_created >= limiteRecientes,
-      }),
-      obtenerResenasFiltradas(appId, { dayRange: null }),
     ])
 
     // La clave del JSON no siempre es el appid pedido (ver helper).
@@ -801,10 +801,64 @@ app.get('/analizar/:appId', async (req, res) => {
     const capsuleImageV5 = appDetailsData.capsule_image || appDetailsData.capsule_imagev5 || ''
     const metacritic = appDetailsData.metacritic || {}
     // Si el juego no existe en Steam, appdetails no trae data: 404 directo
+    // (se resuelve antes de gastar las peticiones de reseñas que no se usarían)
     if (!appDetailsData.name) {
       return res.status(404).json({ error: 'Juego no encontrado en Steam.' })
     }
     const nombreJuego = appDetailsData.name
+
+    // Fecha de lanzamiento (medianoche UTC) y días desde entonces: deciden si
+    // el Panel II (histórico) aporta algo o duplica al Panel I (30 días).
+    // >30 días → ambos paneles (como siempre); <=30 (o aún sin lanzar) →
+    // solo el de 30 días; sin fecha parseable → se decide con las reseñas
+    // reales, más abajo (fallback, porque no hay otra fuente confiable).
+    const fechaLanzamiento = parseSteamReleaseDate(appDetailsData.release_date)
+    const daysSinceRelease =
+      fechaLanzamiento === null ? null : diasDesdeLanzamiento(fechaLanzamiento)
+    let showHistorical =
+      daysSinceRelease === null ? null : daysSinceRelease > 30
+
+    // 2. TRAEMOS RESEÑAS YA FILTRADAS: se pide de a 100, filtrando basura y longitud
+    // (≤ 400 caracteres en el original) sobre la marcha, hasta juntar 150 candidatas válidas
+    // por columna (o hasta agotar las reseñas del juego, típico de indies/juegos nuevos).
+    // "Recientes" además exige que la reseña sea de los últimos 30 días.
+    // La muestra histórica SOLO se pide cuando el panel histórico aplica:
+    // en un juego joven duplica la de 30 días y además costaría su llamada de IA.
+    const limiteRecientes = Math.floor(Date.now() / 1000) - SEGUNDOS_30_DIAS
+    const promesaRecientes = obtenerResenasFiltradas(appId, {
+      dayRange: 30,
+      filtroAdicional: (r) => r.timestamp_created >= limiteRecientes,
+    })
+    let listaRecientesFiltrada
+    let listaHistoricasFiltrada = null
+    if (showHistorical === null) {
+      // Sin fecha de lanzamiento: se decide con las reseñas reales. OJO:
+      // NO se puede comparar el query_summary de appreviews con y sin
+      // day_range — Steam lo ignora en el summary (verificado: con
+      // num_per_page=0 todas las variantes devuelven el mismo total de
+      // vida, y el filter/all de la lista sí respeta day_range), así que
+      // esa comparación daría "sin histórico" hasta para juegos viejos.
+      // Se comparan en cambio los ids de las dos muestras: el histórico
+      // solo aporta si trae reseñas que NO están ya en la ventana de 30 días.
+      ;[listaRecientesFiltrada, listaHistoricasFiltrada] = await Promise.all([
+        promesaRecientes,
+        obtenerResenasFiltradas(appId, { dayRange: null }),
+      ])
+      // Sin reseñas en la ventana histórica → nada nuevo que mostrar. Si la
+      // historia entera ya cabe en los 30 días → también false. Cualquier
+      // material más vieja → true.
+      showHistorical = muestraHistoricaAporta(
+        listaRecientesFiltrada,
+        listaHistoricasFiltrada,
+      )
+    } else {
+      ;[listaRecientesFiltrada, listaHistoricasFiltrada] = await Promise.all([
+        promesaRecientes,
+        showHistorical
+          ? obtenerResenasFiltradas(appId, { dayRange: null })
+          : null,
+      ])
+    }
 
     const summaryGeneral = resMetaGeneral.data?.query_summary || {}
 
@@ -848,16 +902,21 @@ app.get('/analizar/:appId', async (req, res) => {
       },
     }
 
-    // 3. ARMAMOS LOS INSUMOS: recientes (30 días) e históricos (todas las fechas) por separado
+    // 3. ARMAMOS LOS INSUMOS: recientes (30 días) e históricos (todas las fechas) por
+    // separado. El histórico solo se arma cuando el panel aplica (si no, la muestra
+    // no se pidió y no hay nada que procesar).
     const insumosRecientes = armarInsumosDeResenas(listaRecientesFiltrada)
     const idsDestacadosRecientes = new Set(
       insumosRecientes.destacados.map((d) => d.recommendationid),
     )
-    const insumosHistoricas = armarInsumosDeResenas(listaHistoricasFiltrada, {
-      excluirIds: idsDestacadosRecientes,
-    })
+    const insumosHistoricas =
+      listaHistoricasFiltrada !== null
+        ? armarInsumosDeResenas(listaHistoricasFiltrada, {
+            excluirIds: idsDestacadosRecientes,
+          })
+        : null
 
-    // 4. GENERAMOS TODO EN 2 LLAMADOS DE IA (uno por columna): resumen + destacados
+    // 4. GENERAMOS TODO EN LLAMADOS DE IA (uno por columna): resumen + destacados
     // traducidos (si hace falta) + cierre, todo junto en un solo JSON por columna.
     // Cada columna usa un orden de proveedores distinto (ver ORDEN_RECIENTES / ORDEN_HISTORICOS)
     // para no vaciar la cuota del mismo modelo dos veces seguidas.
@@ -867,13 +926,19 @@ app.get('/analizar/:appId', async (req, res) => {
       null, // 'recientes' no usa datos oficiales, usa insumosRecientes.pctMuestra
     )
 
-    await esperar(1500) // Pausa para evitar bloqueos por IP entre las 2 columnas
-
-    const resultadoHistoricas = await procesarColumna(
-      'historicos',
-      insumosHistoricas,
-      datosOficialesHistoricos,
-    )
+    // El histórico existe solo si el panel aplica (juego con >30 días o sin
+    // fecha decidida por reseñas). En juegos jóvenes se ahorra la segunda
+    // llamada de IA completa — y la pausa de 1.5 s que la protege no aplica
+    // porque no hay segunda llamada que proteger.
+    let resultadoHistoricas = null
+    if (showHistorical) {
+      await esperar(1500) // Pausa para evitar bloqueos por IP entre las 2 columnas
+      resultadoHistoricas = await procesarColumna(
+        'historicos',
+        insumosHistoricas,
+        datosOficialesHistoricos,
+      )
+    }
 
     // 5. CONSULTAR A IGDB
     let igdbDatos = {
@@ -951,17 +1016,23 @@ app.get('/analizar/:appId', async (req, res) => {
       }
     }
 
-    // 6. RESPUESTA FINAL (mismo shape que el frontend ya espera)
+    // 6. RESPUESTA FINAL (mismo shape que el frontend ya espera + los campos
+    //    nuevos de fecha de lanzamiento). Cuando el histórico no aplica
+    //    (juego con <=30 días) las claves del panel histórico quedan en null:
+    //    presentes para no romper el contrato, vacías en contenido.
     return res.json({
       metaCard,
+      releaseDate: fechaLanzamiento ? fechaLanzamiento.toISOString() : null,
+      daysSinceRelease,
+      showHistorical,
       resumenTecnico: resultadoRecientes.resumen,
-      resumenGeneral: resultadoHistoricas.resumen,
+      resumenGeneral: resultadoHistoricas?.resumen ?? null,
       introDestacadosRecientes: resultadoRecientes.intro,
       cierreRecientes: resultadoRecientes.cierre,
-      introDestacadosHistoricos: resultadoHistoricas.intro,
-      cierreHistoricos: resultadoHistoricas.cierre,
+      introDestacadosHistoricos: resultadoHistoricas?.intro ?? null,
+      cierreHistoricos: resultadoHistoricas?.cierre ?? null,
       destacadosRecientes: resultadoRecientes.destacados,
-      destacadosHistoricos: resultadoHistoricas.destacados,
+      destacadosHistoricos: resultadoHistoricas?.destacados ?? null,
       igdb: igdbDatos,
     })
   } catch (error) {
