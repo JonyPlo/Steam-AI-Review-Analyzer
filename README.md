@@ -15,9 +15,9 @@ números crudos.
 - **Buscador con dropdown en vivo** contra la tienda de Steam (debounce 400 ms,
   mínimo 3 caracteres, navegación por teclado, hasta 20 juegos con cápsula, reseñas
   y polaridad).
-- **Sala de análisis por juego** con dos muros de lectura:
+- **Sala de análisis por juego** con muros de lectura:
   - **Panel I — Últimos 30 días**: qué dice el público hoy + 2 reseñas destacadas.
-  - **Panel II — Todo el historial**: lo mejor valorado desde el lanzamiento + 2 reseñas destacadas.
+  - **Panel II — Todo el historial**: lo mejor valorado desde el lanzamiento + 2 reseñas destacadas. Solo aparece cuando el juego supera los 30 días de lanzamiento; antes, el Panel I cubre la sala completa ("Desde el lanzamiento", con la edad del juego).
   - Cada panel cierra con su **placa de veredicto** (recomendación concreta).
 - **Placa de sala** con el porcentaje oficial de Steam, la clasificación traducida
   ("Extremadamente positivas", "Mixtas"…) y los votos reales, siempre en filas de
@@ -46,9 +46,12 @@ La interfaz está pensada como un museo:
 1. `/buscar?name=…` parsea la página de resultados de la tienda de Steam (SSR) y
    enriquece cada juego con el resumen oficial de reseñas. Si el HTML no está
    disponible, usa el API `storesearch` como respaldo.
-2. `/analizar/:appId` toma dos muestras de reseñas filtradas (últimos 30 días y todo
-   el historial), descarta la basura y arma **2 llamadas de IA** (una por columna)
-   que devuelven en un solo JSON: resumen, 2 destacados traducidos y cierre.
+2. `/analizar/:appId` toma la muestra de reseñas filtradas de los últimos 30 días y, si
+   el juego supera los 30 días de lanzamiento (o si no tiene fecha y sus reseñas
+   históricas aportan algo), la muestra de todo el historial. De ahí arma **1 o 2
+   llamadas de IA** (una por columna) que devuelven en un solo JSON: resumen, 2
+   destacados traducidos y cierre. En un juego joven (≤30 días) solo se hace la
+   llamada del Panel I, que en la web se titula "Desde el lanzamiento".
 3. Si un proveedor de IA falla o se satura, pasa al siguiente de la cascada; si todos
    fallan, la app muestra un **cierre determinístico** armado con los porcentajes
    reales de Steam (nunca inventa opiniones).
@@ -138,6 +141,7 @@ configurar URLs. Abrí `http://localhost:5173`.
 | `npm run dev` | API + web en desarrollo (concurrently) |
 | `npm run build` | Build de producción de la web (`web/dist`) |
 | `npm run lint` | ESLint del frontend |
+| `npm test` | Tests unitarios (node:test, sin dependencias) de los helpers de fecha |
 | `npm start` | Solo la API (producción) |
 
 ## 🧰 Stack
