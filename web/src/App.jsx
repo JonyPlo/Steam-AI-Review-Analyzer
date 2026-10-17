@@ -51,6 +51,7 @@ import SearchBar from './components/SearchBar'
 import { traducirReview } from './i18n'
 import ReviewCard from './components/ReviewCard'
 import PercentScore from './components/PercentScore'
+import AvisoNuevaFeature from './components/AvisoNuevaFeature'
 import { useTheme } from './theme'
 
 // En dev la web pasa por el proxy de Vite (/api/* -> localhost:3001).
@@ -1604,6 +1605,11 @@ export default function App() {
           </span>
         </div>
       </footer>
+
+      {/* Aviso de nuevas features: se monta una sola vez (una vez por
+          carga de la página, no por vista). Evalúa el registro y el
+          mapa de vistos de localStorage; ver el componente. */}
+      <AvisoNuevaFeature />
     </div>
   )
 }
