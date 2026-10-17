@@ -727,6 +727,9 @@ async function procesarColumna(tipo, insumos, datosOficiales) {
 
   // Fallback total: si TODOS los proveedores fallaron, igual devolvemos algo coherente
   // (resumen genérico, destacados sin traducir, cierre con los números reales).
+  // `degradado` marca esa columna para que el endpoint exponga `degraded`:
+  // el frontend la usa para NO pisar una copia buena en el caché (ni al
+  // cargarla por primera vez ni al actualizarla) y muestra aviso inline.
   if (!resultadoIA) {
     return {
       resumen:
@@ -734,6 +737,7 @@ async function procesarColumna(tipo, insumos, datosOficiales) {
       destacados: insumos.destacados,
       cierre: cierreFallback,
       intro: introDestacados,
+      degradado: true,
     }
   }
 
@@ -763,6 +767,12 @@ async function procesarColumna(tipo, insumos, datosOficiales) {
 // ENDPOINT 2: El motor de análisis con sistema de redundancia
 app.get('/analizar/:appId', async (req, res) => {
   const { appId } = req.params
+
+  // Sin caché HTTP (ni del navegador ni de una CDN/proxy intermedio):
+  // cada /analizar es fresco. El único caché real vive en el
+  // localStorage del frontend (TTL 3 días), y lo saltea el botón
+  // "Actualizar" desde ese lado.
+  res.set('Cache-Control', 'no-store')
 
   // Validación: appId de Steam siempre es numérico
   if (!/^[0-9]+$/.test(appId)) {
@@ -1020,11 +1030,19 @@ app.get('/analizar/:appId', async (req, res) => {
     //    nuevos de fecha de lanzamiento). Cuando el histórico no aplica
     //    (juego con <=30 días) las claves del panel histórico quedan en null:
     //    presentes para no romper el contrato, vacías en contenido.
+    // `degraded`: true si ALGUNA columna cayó al fallback determinístico
+    // (todos los proveedores de la cascada fallaron). El histórico no
+    // existe (juego joven) y por eso no degrada: no hay 2ª columna que caiga.
+    const degradado =
+      !!resultadoRecientes.degradado ||
+      !!(resultadoHistoricas && resultadoHistoricas.degradado)
+
     return res.json({
       metaCard,
       releaseDate: fechaLanzamiento ? fechaLanzamiento.toISOString() : null,
       daysSinceRelease,
       showHistorical,
+      degraded: degradado,
       resumenTecnico: resultadoRecientes.resumen,
       resumenGeneral: resultadoHistoricas?.resumen ?? null,
       introDestacadosRecientes: resultadoRecientes.intro,
