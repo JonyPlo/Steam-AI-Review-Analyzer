@@ -180,6 +180,44 @@ body {
   cursor: not-allowed;
 }
 
+/* --- Botón secundario: hairline que se dora al hover (el botón
+   "Actualizar" de la fila de cabecera de la sala). El color del
+   ícono/texto lo maneja el propio componente (group-hover). --- */
+.btn-secondary {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  transition: border-color 0.18s ease, opacity 0.18s ease;
+}
+.btn-secondary:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.btn-secondary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* --- Slot de estado de la fila de cabecera: fade de 150 ms cuando
+   cambia el estado (éxito / error / sello). Sin animación si el
+   usuario prefiere reducir el movimiento. --- */
+.estado-fade {
+  animation: estado-fade 150ms ease-out;
+}
+
+@keyframes estado-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .estado-fade {
+    animation: none;
+  }
+}
+
 /* --- Chips de polaridad: esquinas nítidas, hairline --- */
 .chip {
   display: inline-flex;

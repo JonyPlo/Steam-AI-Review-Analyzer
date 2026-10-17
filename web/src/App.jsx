@@ -45,6 +45,7 @@ import {
   ArrowLeft,
   Check,
   Loader2,
+  RefreshCw,
 } from 'lucide-react'
 import SearchBar from './components/SearchBar'
 import { traducirReview } from './i18n'
@@ -61,6 +62,18 @@ const CACHE_TTL = 3 * 24 * 60 * 60 * 1000
 // aplica). El cambio de prefijo hace que las entradas viejas (analisis_*)
 // se ignoren sin migración.
 const ANALISIS_CACHE_PREFIX = 'analisis2_'
+// Cooldown del botón "Actualizar" (por juego): 10 min desde que se
+// generó el análisis vigente (carga inicial o refresh). Es solo UX:
+// se saltea limpiando localStorage. (El backend de producción corre
+// serverless: no suma rate limit propio — ver AGENTS.md.)
+const REFRESH_COOLDOWN_MS = 10 * 60 * 1000
+// Cooldown corto (1 min) tras un refresh que falló o llegó degradado:
+// evita reintentar a ráfaga mientras los proveedores siguen caídos.
+const REFRESH_COOLDOWN_FALLA_MS = 60 * 1000
+// Ventana del feedback de éxito: tras un refresh exitoso, el slot de la
+// fila de cabecera muestra "✓ Información actualizada" durante 4 s y
+// vuelve al sello. (Se define en un solo lugar.)
+const REFRESH_SUCCESS_MS = 4000
 const EASE = [0.22, 1, 0.36, 1]
 
 /* ---------- helpers ---------- */
@@ -170,6 +183,22 @@ function subtituloLanzamiento(data) {
   if (dias === 0) return 'Salió hoy'
   if (dias === 1) return 'Salió ayer'
   return `Salió hace ${dias} días`
+}
+
+/* Sello "Actualizado hace X" de la placa de sala: Intl.RelativeTimeFormat
+   en es-AR. Sin generatedAt (entradas del esquema v2 guardadas antes de
+   la Tarea 2) → "hace un tiempo" (y el botón, sin cooldown). */
+const RTF_ES_AR = new Intl.RelativeTimeFormat('es-AR', { numeric: 'auto' })
+function selloActualizado(generatedAt, ahora) {
+  if (typeof generatedAt !== 'number' || !Number.isFinite(generatedAt))
+    return 'Actualizado hace un tiempo'
+  const delta = ahora - generatedAt
+  if (delta < 60 * 1000) return 'Actualizado hace menos de 1 minuto'
+  if (delta < 60 * 60 * 1000)
+    return `Actualizado ${RTF_ES_AR.format(-Math.round(delta / 60000), 'minute')}`
+  if (delta < 24 * 60 * 60 * 1000)
+    return `Actualizado ${RTF_ES_AR.format(-Math.round(delta / 3600000), 'hour')}`
+  return `Actualizado ${RTF_ES_AR.format(-Math.round(delta / 86400000), 'day')}`
 }
 
 /* ---------- UI atómica ---------- */
@@ -617,6 +646,188 @@ function PanelError({ titulo, detalle, onRetry }) {
   )
 }
 
+/* Slot de estado + botón "Actualizar" de la fila de cabecera de la sala
+   (misma fila que "Salir de la sala", lado derecho). El slot es una
+   sola línea y muestra una cosa a la vez, por prioridad:
+   1) en vuelo → "Actualizando…"
+   2) error de la última actualización (mientras dure el cooldown corto
+      de 1 min) → "No pudimos actualizar ahora. Probá en unos minutos."
+      (mobile: versión corta "No se pudo actualizar. Probá luego.")
+   3) éxito reciente (4 s) → "✓ Información actualizada" (oro, no verde:
+      el verde es exclusivo de la polaridad de reseñas)
+   4) por defecto → el sello "Actualizado hace X"
+   El error reemplaza al sello en el mismo slot: no reserva espacio y la
+   altura de la fila/grilla no cambia en ningún estado. En mobile y
+   tablet el slot baja a una segunda línea (derecha, alto fijo de una
+   línea: siempre ocupada) y vuelve a la fila en lg. El reloj de 30 s
+   vive acá (estado local): el sello y el countdown se refrescan sin
+   re-renderizar el resto, y las ventanas de éxito/error se reevalúan
+   en su vencimiento exacto. */
+function useMediaQuery(query) {
+  const [match, setMatch] = useState(() => window.matchMedia(query).matches)
+  useEffect(() => {
+    const mq = window.matchMedia(query)
+    const onChange = (e) => setMatch(e.matches)
+    mq.addEventListener('change', onChange)
+    // Re-sincroniza el valor inicial de forma asíncrona (sin setState
+    // directo en el cuerpo del efecto).
+    const t = setTimeout(() => setMatch(mq.matches), 0)
+    return () => {
+      mq.removeEventListener('change', onChange)
+      clearTimeout(t)
+    }
+  }, [query])
+  return match
+}
+
+function EstadoActualizacion({
+  generatedAt,
+  actualizando,
+  mensajeError,
+  cooldownCorto,
+  exito,
+  onRefresh,
+  reduced,
+  evitaSello = false,
+}) {
+  // Reloj: lazy al montar + re-sincronización asíncrona cuando cambia el
+  // estado (sin re-renders en cascada) + tick de 30 s.
+  const [ahora, setAhora] = useState(() => Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setAhora(Date.now()), 30 * 1000)
+    return () => clearInterval(id)
+  }, [])
+  useEffect(() => {
+    const t = setTimeout(() => setAhora(Date.now()), 0)
+    return () => clearTimeout(t)
+  }, [generatedAt, actualizando, mensajeError, cooldownCorto, exito])
+  // El próximo vencimiento (éxito de 4 s / error de 1 min): se
+  // re-renderiza justo cuando expira, sin esperar el tick de 30 s.
+  const vencimiento = [exito ?? 0, mensajeError ? cooldownCorto ?? 0 : 0]
+    .filter((u) => u > 0)
+    .sort((a, b) => a - b)[0]
+  useEffect(() => {
+    if (!vencimiento || vencimiento <= ahora) return
+    const t = setTimeout(() => setAhora(Date.now()), vencimiento - Date.now())
+    return () => clearTimeout(t)
+  }, [vencimiento, ahora])
+
+  const esMobile = useMediaQuery('(max-width: 1023px)')
+
+  const errorVivo = !!mensajeError && (cooldownCorto ?? 0) > ahora
+  const exitoVivo = (exito ?? 0) > ahora
+
+  const cooldownBase =
+    typeof generatedAt === 'number' && Number.isFinite(generatedAt)
+      ? generatedAt + REFRESH_COOLDOWN_MS
+      : 0
+  const cooldownUntil = Math.max(cooldownBase, cooldownCorto ?? 0)
+  const restante = Math.max(0, cooldownUntil - ahora)
+  const enCooldown = !actualizando && restante > 0
+  const deshabilitado = actualizando || enCooldown
+
+  let tipo
+  let texto
+  if (actualizando) {
+    tipo = 'actualizando'
+    texto = 'Actualizando…'
+  } else if (errorVivo) {
+    tipo = 'error'
+    texto = esMobile
+      ? 'No se pudo actualizar. Probá luego.'
+      : 'No pudimos actualizar ahora. Probá en unos minutos.'
+  } else if (exitoVivo) {
+    tipo = 'exito'
+    texto = '✓ Información actualizada'
+  } else {
+    tipo = 'sello'
+    texto = selloActualizado(generatedAt, ahora)
+  }
+
+  // Mobile: etiquetas acortadas del cooldown (el botón comparte la 1ª
+  // línea con "Salir de la sala": "Disponible en…" no cabe a 375 px).
+  // Desktop: el texto completo de la spec.
+  const textoBoton = actualizando
+    ? 'Actualizando…'
+    : enCooldown
+      ? restante <= 60 * 1000
+        ? esMobile
+          ? 'En 1 min'
+          : 'Disponible en menos de 1 min'
+        : esMobile
+          ? `En ${Math.ceil(restante / 60000)} min`
+          : `Disponible en ${Math.ceil(restante / 60000)} min`
+      : 'Actualizar'
+
+  const title = enCooldown
+    ? `Los datos de Steam no cambian tan rápido. Podés actualizar de nuevo en ${
+        restante <= 60 * 1000 ? 'menos de 1 min' : `${Math.ceil(restante / 60000)} min`
+      }.`
+    : 'Pedir un análisis nuevo, saltándose la copia guardada en el navegador'
+
+  return (
+    <>
+      {/* La región aria-live es estable; el nodo interno se remonta por
+          estado (fade de 150 ms, sin animación con
+          prefers-reduced-motion). Mobile/tablet: 1ª línea = "Salir" +
+          botón (a la derecha, como en la app original); 2ª línea = el
+          slot completo, alineado a la derecha bajo el botón. La fila
+          mide siempre 33 + 8 + 24, en cualquier estado. lg: todo en
+          una línea; si el sello de Metacritic está presente, el grupo
+          se retira 60 px del borde (el sello ocupa desde 47 px adentro
+          de la esquina de la placa: 47 + 13 de respiro). */}
+      <span
+        aria-live="polite"
+        className="order-3 w-full max-w-full overflow-hidden whitespace-nowrap text-right lg:order-none lg:ml-auto lg:w-auto lg:overflow-visible lg:text-left"
+      >
+        <span
+          key={tipo}
+          className={`estado-fade label !text-[10px] ${
+            tipo === 'exito' ? 'text-accent' : 'text-faint'
+          }`}
+        >
+          {texto}
+        </span>
+      </span>
+      <button
+        type="button"
+        onClick={onRefresh}
+        disabled={deshabilitado}
+        aria-busy={actualizando ? true : undefined}
+        title={title}
+        className={`btn-secondary group order-2 ml-auto flex items-center gap-2 px-3.5 py-2 lg:order-none lg:ml-0${evitaSello ? ' lg:mr-[60px]' : ''}`}
+      >
+        {/* El ícono solo en desktop: en mobile el botón comparte la 1ª
+            línea con "Salir de la sala" y el ícono no cabe. */}
+        {!esMobile && (
+          <RefreshCw
+            size={13}
+            aria-hidden="true"
+            className={`shrink-0 transition-colors ${
+              actualizando
+                ? `text-accent${reduced ? '' : ' animate-spin'}`
+                : deshabilitado
+                  ? 'text-faint'
+                  : 'text-faint group-hover:text-accent'
+            }`}
+          />
+        )}
+        <span
+          className={`label !text-[10px] transition-colors ${
+            actualizando
+              ? 'text-accent'
+              : deshabilitado
+                ? 'text-faint'
+                : 'text-muted group-hover:text-ink'
+          }`}
+        >
+          {textoBoton}
+        </span>
+      </button>
+    </>
+  )
+}
+
 /* ---------- App ---------- */
 
 export default function App() {
@@ -634,6 +845,20 @@ export default function App() {
   const [loadingAnalysis, setLoadingAnalysis] = useState(false)
   const [analysisError, setAnalysisError] = useState(null)
   const [lastAppId, setLastAppId] = useState(null)
+
+  /* Estado del botón "Actualizar" (fila de cabecera de la sala): qué
+     refresh está en vuelo, el error de la última actualización (por
+     juego), el cooldown corto de 1 min tras un fallo y el éxito
+     reciente (por juego, 4 s). El cooldown largo (10 min) no se guarda:
+     se deriva del generatedAt de la copia vigente. */
+  const [updatingAppId, setUpdatingAppId] = useState(null)
+  const [refreshError, setRefreshError] = useState(null) // { appId, mensaje }
+  const [shortCooldown, setShortCooldown] = useState(null) // { appId, until }
+  const [refreshOk, setRefreshOk] = useState(null) // { appId, until }
+  const inFlightRef = useRef(new Set())
+  const lastAppIdRef = useRef(null)
+  const errorTimeoutRef = useRef(null)
+  const successTimeoutRef = useRef(null)
 
   /* Visitas recientes del cache local: se recalculan al entrar al vestíbulo */
   const recientes = useMemo(() => (view === 'inicio' ? leerRecientes(6) : []), [view])
@@ -734,15 +959,39 @@ export default function App() {
     setListLoading(false)
   }, [query, cerrarDropdown])
 
-  /* Visitar la sala de un juego */
+  /* Visitar la sala de un juego. Normaliza appId a string en la puerta:
+     la grilla "recientes" lo trae como Number (leerRecientes) y la
+     búsqueda como string; con un tipo único las comparaciones de
+     identidad del botón "Actualizar" (updatingAppId/refreshError/
+     shortCooldown vs. metaCard.appId) nunca fallan. */
   const cargarAnalisis = useCallback(
-    async (appId) => {
+    async (appIdRaw) => {
+      const appId = String(appIdRaw)
       cerrarDropdown()
       setQuery('')
       setAnalisisData(null)
       setAnalysisError(null)
       setLastAppId(appId)
       setView('analisis')
+
+      // Estado del refresh ("Actualizar"): se limpia si era de OTRO
+      // juego; si es del mismo (re-entrar a la sala) se conserva: la
+      // request en vuelo y el cooldown corto siguen vigentes.
+      lastAppIdRef.current = appId
+      setUpdatingAppId((u) => (u && String(u) !== appId ? null : u))
+      setRefreshError((e) => (e && String(e.appId) !== appId ? null : e))
+      setShortCooldown((c) =>
+        c && (String(c.appId) !== appId || c.until <= Date.now()) ? null : c,
+      )
+      setRefreshOk((s) => (s && String(s.appId) !== appId ? null : s))
+      if (errorTimeoutRef.current) {
+        clearTimeout(errorTimeoutRef.current)
+        errorTimeoutRef.current = null
+      }
+      if (successTimeoutRef.current) {
+        clearTimeout(successTimeoutRef.current)
+        successTimeoutRef.current = null
+      }
 
       const cacheKey = `${ANALISIS_CACHE_PREFIX}${appId}`
       let data = obtenerDeCache(cacheKey)
@@ -768,6 +1017,17 @@ export default function App() {
         if (!res.ok || !json || json.error) {
           throw new Error(json?.error || 'HTTP ' + res.status)
         }
+        // El sello "Actualizado hace X" y el cooldown del botón
+        // "Actualizar" parten de cuándo se generó ESTE análisis, no de
+        // cuándo la entrada de caché se guardó.
+        json.generatedAt = Date.now()
+        if (json.degraded) {
+          // Todos los proveedores de IA caídos: se muestra el cierre
+          // determinístico, pero NO se guarda en el caché — la próxima
+          // visita vuelve a pedir un análisis de verdad.
+          setAnalisisData(json)
+          return
+        }
         guardarEnCache(cacheKey, json)
         setAnalisisData(json)
       } catch (err) {
@@ -780,10 +1040,94 @@ export default function App() {
     [cerrarDropdown],
   )
 
+  /* "Actualizar" de la placa de sala: re-pide /analizar para la sala
+     activa, ignorando el caché de localStorage. No hay otro caché que
+     saltear (el server no cachea en memoria y la ruta responde
+     no-store), pero se manda ?refresh=1 de todas formas: si la
+     producción crece un edge/CDN a futuro, ese parámetro la salta.
+     La request se deja terminar aunque el usuario cambie de juego: el
+     resultado se guarda en el caché de ESE appId, pero el estado de la
+     sala activa solo se toca si la sala sigue siendo ese juego. El set
+     de vuelo bloquea el doble click y las requests simultáneas. */
+  const refrescarAnalisis = useCallback(async () => {
+    const appId = lastAppIdRef.current ? String(lastAppIdRef.current) : null
+    if (!appId || inFlightRef.current.has(appId)) return
+
+    const cacheKey = `${ANALISIS_CACHE_PREFIX}${appId}`
+    inFlightRef.current.add(appId)
+    setUpdatingAppId(appId)
+    setRefreshError(null)
+
+    const registrarFallo = (mensaje) => {
+      // No se pisa la copia buena: la sala y el caché quedan intactos,
+      // se muestra el mensaje inline y se aplica el cooldown corto.
+      setRefreshError({ appId, mensaje })
+      setShortCooldown({ appId, until: Date.now() + REFRESH_COOLDOWN_FALLA_MS })
+      if (errorTimeoutRef.current) clearTimeout(errorTimeoutRef.current)
+      errorTimeoutRef.current = setTimeout(() => {
+        setRefreshError((e) => (e && e.appId === appId ? null : e))
+      }, REFRESH_COOLDOWN_FALLA_MS)
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/analizar/${appId}?refresh=1`)
+      let json = null
+      try {
+        json = await res.json()
+      } catch {
+        /* cuerpo no-JSON: se trata como fallo abajo */
+      }
+      if (!res.ok || !json || json.error) {
+        // Falla HTTP: si el server trae un mensaje propio se muestra
+        // ese (es más específico que el genérico).
+        registrarFallo(
+          json?.error ||
+            `No se pudo actualizar ahora (HTTP ${res.status}). Probá en unos minutos.`,
+        )
+        return
+      }
+      if (json.degraded) {
+        // Todos los proveedores de IA caídos: el server devolvió el
+        // cierre determinístico. Se trata como un fallo: la copia buena
+        // (sala y caché) queda intacta.
+        registrarFallo('No pudimos actualizar ahora. Probá en unos minutos.')
+        return
+      }
+      json.generatedAt = Date.now()
+      guardarEnCache(cacheKey, json) // reemplaza la copia de este juego
+      setShortCooldown(null)
+      // Solo se toca la sala si sigue siendo este juego.
+      if (String(lastAppIdRef.current) === appId) setAnalisisData(json)
+      // Feedback de éxito: el slot muestra "✓ Información actualizada"
+      // durante 4 s y solo en la sala de ESTE juego (si el usuario ya
+      // cambió, la sala activa no lo ve). Se limpia con su timeout.
+      setRefreshOk({ appId, until: Date.now() + REFRESH_SUCCESS_MS })
+      if (successTimeoutRef.current) clearTimeout(successTimeoutRef.current)
+      successTimeoutRef.current = setTimeout(() => {
+        setRefreshOk((s) => (s && s.appId === appId ? null : s))
+      }, REFRESH_SUCCESS_MS)
+    } catch (err) {
+      console.error('Error actualizando análisis:', err)
+      registrarFallo('No pudimos actualizar ahora. Probá en unos minutos.')
+    } finally {
+      inFlightRef.current.delete(appId)
+      setUpdatingAppId((u) => (u === appId ? null : u))
+    }
+  }, [])
+
   const volverInicio = () => {
     setView('inicio')
     setAnalisisData(null)
     setAnalysisError(null)
+    lastAppIdRef.current = null
+    setUpdatingAppId(null)
+    setRefreshError(null)
+    setShortCooldown(null)
+    setRefreshOk(null)
+    if (successTimeoutRef.current) {
+      clearTimeout(successTimeoutRef.current)
+      successTimeoutRef.current = null
+    }
   }
 
   const meta = analisisData?.metaCard
@@ -1080,16 +1424,50 @@ export default function App() {
                 <>
                   {/* Cabecera de sala: la obra expuesta + la placa */}
                   <section className="mx-auto w-full max-w-7xl px-4 pb-10 pt-7 sm:px-6 sm:pb-14 sm:pt-10">
-                    <button
-                      type="button"
-                      onClick={volverInicio}
-                      className="group inline-flex items-center gap-2 border border-line bg-surface px-3.5 py-2 transition-colors hover:border-accent"
-                    >
-                      <ArrowLeft size={13} className="text-faint transition-colors group-hover:text-accent" aria-hidden="true" />
-                      <span className="label !text-[10px] text-muted transition-colors group-hover:text-ink">
+                    {/* Fila de cabecera: a la izquierda "Salir de la sala"
+                        (sin cambios); a la derecha, el slot de estado (una
+                        sola línea) y el botón "Actualizar", alineados al
+                        centro y con la misma altura. Mobile/tablet: botón a
+                        la derecha de la 1ª línea y slot en la 2ª (derecha,
+                        alto fijo de una línea): ningún estado mueve nada.
+                        Si la obra tiene sello de Metacritic (esquina de la
+                        placa), el grupo se retira 60 px del borde en
+                        desktop para no quedar detrás del círculo. */}
+                    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+                      <button
+                        type="button"
+                        onClick={volverInicio}
+                        className="group order-1 inline-flex items-center gap-2 border border-line bg-surface px-3.5 py-2 transition-colors hover:border-accent lg:order-none"
+                      >
+                        <ArrowLeft size={13} className="text-faint transition-colors group-hover:text-accent" aria-hidden="true" />
+                        <span className="label !text-[10px] text-muted transition-colors group-hover:text-ink">
                         Salir de la sala
                       </span>
-                    </button>
+                      </button>
+
+                      <EstadoActualizacion
+                        generatedAt={analisisData?.generatedAt ?? null}
+                        actualizando={updatingAppId === String(meta.appId)}
+                        mensajeError={
+                          refreshError && refreshError.appId === String(meta.appId)
+                            ? refreshError.mensaje
+                            : null
+                        }
+                        cooldownCorto={
+                          shortCooldown && shortCooldown.appId === String(meta.appId)
+                            ? shortCooldown.until
+                            : null
+                        }
+                        exito={
+                          refreshOk && refreshOk.appId === String(meta.appId)
+                            ? refreshOk.until
+                            : null
+                        }
+                        onRefresh={refrescarAnalisis}
+                        reduced={reduced}
+                        evitaSello={!!(meta?.metacritic?.score && meta?.metacritic?.url)}
+                      />
+                    </div>
 
                     <div className="mt-7 grid grid-cols-1 gap-8 lg:grid-cols-12 lg:gap-10">
                       {/* La obra: portada enmarcada, se asienta lentamente.
