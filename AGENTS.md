@@ -46,6 +46,15 @@ Steam AI Review Analyzer: la IA lee reseñas de Steam y devuelve un resumen (úl
 - Frontend: sin router ni lib de estado — una página con 3 vistas (`inicio`/`cards`/`analisis`). Cache en `localStorage` con TTL de 3 días: `busqueda3_{query}` y `analisis2_{appId}` (las entradas también guardan `generatedAt` dentro de `datos`: cuando se generó el análisis — sello "Actualizado hace X" + cooldown del botón "Actualizar"); la grilla "Tus salas recientes" del inicio lee las claves `analisis2_*` (no inventar datos: sin visitas, la sección no existe).
 - Tema: se define en `<html data-theme>` con un script inline en `web/index.html` ANTES del primer paint (localStorage `sara-theme` → `prefers-color-scheme` → dark por defecto). Tokens en `web/src/main.css` (`@theme inline` → Tailwind 4).
 
+## Avisos de nuevas features
+
+Sistema reutilizable de un único toast (no modal) que informa una feature nueva la primera vez que el usuario entra, durante la ventana de vigencia del aviso.
+
+- Registro: `web/src/announcements.js` — array de `{ id, title, body, addedAt, expiresAt }` (fechas ISO, solo día). Para anunciar una feature nueva, agregá un objeto con un `id` estable (queda en localStorage; nunca lo reutilices para otra feature). Sugerido para `expiresAt`: ~30 días desde el `addedAt`. Los avisos vencidos se ignoran solos y sus ids se limpian del storage al cargar.
+- Lógica pura: `web/src/announcementsLogic.js` — `getActiveAnnouncement(announcements, seenIds, now)` devuelve a lo sumo UN aviso: el vigente no visto con el `addedAt` más reciente; si hay varios elegibles, el resto queda pendiente para visitas futuras hasta que venza (nunca se apilan). Testeada con node:test en `web/src/announcementsLogic.test.js` (corre con `npm test`).
+- Storage: clave `avisosVistos_1` (mapa `{ id: fechaMsVisto }`, misma convención de versionado de prefijo que `busqueda3_`/`analisis2_`). El aviso se marca visto cuando se MUESTRA (~1,5 s después de la carga), no cuando se cierra: un reload no lo repite. Si localStorage no está disponible o falla, el aviso no se muestra.
+- Componente: `web/src/components/AvisoNuevaFeature.jsx`, montado una vez en App (una vez por carga de página, no por vista). Aparece a los ~1,5 s, se cierra solo a los 12 s (el timer se pausa con hover/foco), con botón X y Escape; `role="status"` + `aria-live="polite"`; Framer Motion (AnimatePresence) respetando `prefers-reduced-motion`. En mobile va a ancho completo abajo, respetando `safe-area-inset-bottom` (por eso el viewport meta de `web/index.html` lleva `viewport-fit=cover`). Z-40, bajo el dropdown del buscador (z-50): si se solapan, gana el dropdown.
+
 ## Convenciones
 
 - Comentarios del código en español, tono voseo ("Buscá", "probá"): mantenerlo al editar.
