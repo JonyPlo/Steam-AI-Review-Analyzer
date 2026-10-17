@@ -22,6 +22,9 @@ números crudos.
 - **Placa de sala** con el porcentaje oficial de Steam, la clasificación traducida
   ("Extremadamente positivas", "Mixtas"…) y los votos reales, siempre en filas de
   altura fija: ningún texto largo mueve o desalinea la interfaz.
+- **Botón "Actualizar" en la placa de cada sala**: re-pide el análisis sin esperar a
+  que venza el caché de 3 días (cooldown de 10 min por juego; si la actualización
+  falla, la copia anterior queda intacta y aparece un mensaje inline).
 - **Sello de Metacritic** flotante (clicable, con el metascore) cuando existe; su
   presencia o ausencia nunca cambia el tamaño de la placa.
 - **Ficha técnica con scores de IGDB** (prensa / usuarios / total) si hay credenciales.
@@ -54,7 +57,9 @@ La interfaz está pensada como un museo:
    llamada del Panel I, que en la web se titula "Desde el lanzamiento".
 3. Si un proveedor de IA falla o se satura, pasa al siguiente de la cascada; si todos
    fallan, la app muestra un **cierre determinístico** armado con los porcentajes
-   reales de Steam (nunca inventa opiniones).
+   reales de Steam (nunca inventa opiniones). Esa respuesta llega marcada con
+   `degraded:true` y no se guarda en el caché de 3 días: la próxima visita vuelve a
+   pedir un análisis de verdad.
 
 ### Cascada de IA
 
@@ -77,7 +82,7 @@ seguidas a la misma cuota:
 | Endpoint | Descripción |
 |---|---|
 | `GET /buscar?name=…` | Buscador de la tienda (hasta 20 juegos, enriquecidos con reseñas). |
-| `GET /analizar/:appId` | Análisis completo: portada, % oficial, 2 columnas de IA, destacados, IGDB y Metacritic. |
+| `GET /analizar/:appId` | Análisis completo: portada, % oficial, 2 columnas de IA, destacados, IGDB y Metacritic. Responde `Cache-Control: no-store` (sin caché HTTP ni del navegador; la cache local de 3 días vive en el `localStorage` del frontend) y agrega `degraded:true` cuando todos los proveedores de IA fallan. |
 
 ## 🎨 Diseño
 
