@@ -33,6 +33,61 @@ app.use((_req, res, next) => {
 
 const esperar = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
+// User-Agent de navegador para TODAS las peticiones de /analizar a Steam. Axios
+// desde Node no manda ninguno por defecto, y un endpoint de datos sin UA es un
+// fingerprint de bot: tras golpetear `appreviews` varios días, Steam pasó a
+// limitar la IP (302 → portada o 429) y la app "de la nada" dejó de generar
+// resúmenes (verificar 10/2026).
+const UA_NAVEGADOR =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+
+// Mensaje de usuario para el 503 de throttle de Steam: App.jsx lo muestra en el
+// detalle de la pantalla de error de la sala (lee json.error).
+const MSG_STEAM_BLOQUEADO =
+  'Steam está limitando las peticiones desde esta red por ahora (filtro anti-bot). No es un fallo de la app: probá de nuevo en unos minutos u horas.'
+
+// Sube cuando Steam está limitando el acceso de esta IP: 429/403/503 directo, o
+// el 302 → portada que axios sigue y convierte en HTML con 200. Antes ese 302 se
+// leía en silencio como "0 reseñas" (la sala decía "insuficientes" para cualquier
+// juego y la IA no corrió) y el 429 caía al 500 genérico. El endpoint lo traduce
+// en un 503 con mensaje claro.
+class ErrorSteamBloqueado extends Error {}
+
+function esErrorThrottleSteam(err) {
+  const s = err?.response?.status
+  return s === 429 || s === 403 || s === 503
+}
+
+// Steam limitado responde 302 → portada: axios sigue el redirect y devuelve el
+// HTML de la home con status 200. El JSON real de Steam siempre llega parseado
+// como objeto; si el cuerpo llega como string, es HTML (bloqueo).
+function esCuerpoHtml(respuesta) {
+  return !respuesta?.data || typeof respuesta.data !== 'object'
+}
+
+// GET a Steam con UA de navegador y UN reintento tras pausa si el bloqueo
+// parece transitorio (429/403/503): el throttle dura minutos/horas, pero un
+// reintento barato atrapa el momento en que cede. Si el reintento sigue
+// bloqueado (o llega con HTML), sube ErrorSteamBloqueado; cualquier otro error
+// se repasa tal cual para que lo maneje el catch de cada caller.
+async function pedirSteam(url) {
+  const hacer = () => axios.get(url, { headers: { 'User-Agent': UA_NAVEGADOR } })
+  try {
+    const r = await hacer()
+    if (esCuerpoHtml(r)) throw new ErrorSteamBloqueado()
+    return r
+  } catch (err) {
+    if (err instanceof ErrorSteamBloqueado) throw err
+    if (esErrorThrottleSteam(err)) {
+      await esperar(2500)
+      const r = await hacer()
+      if (esCuerpoHtml(r)) throw new ErrorSteamBloqueado()
+      return r
+    }
+    throw err
+  }
+}
+
 // FUNCIÓN AUXILIAR: Obtener Token de IGDB
 async function obtenerIgdbToken() {
   try {
@@ -260,12 +315,20 @@ function veredictoSegunPct(pct) {
 // Si con la primera tanda no alcanza, sigue pidiendo páginas de a `perPage` hasta lograrlo,
 // hasta agotar las reseñas del juego, o hasta `maxCrudasTotal` como tope de seguridad
 // (para juegos con cientos de miles de reseñas no nos quedamos pidiendo para siempre).
+//
+// El pool de 70 es a propósito (bajado de 150): armarInsumosDeResenas solo consume el
+// top 50 (50 de contexto + 2 destacados, menos hasta 2 excluidos entre columnas) y la
+// mitad de requests es lo que desinfla el golpeteo a `appreviews` que hace que Steam
+// limite la IP. 70 deja margen para la dedup entre columnas sin pedir de más.
+//
+// Si Steam limita la IP a mitad de paginar, sube ErrorSteamBloqueado (vía pedirSteam):
+// mejor un 503 honesto del endpoint que seguir "con éxito" una lista vacía o a medias.
 async function obtenerResenasFiltradas(
   appId,
   {
     dayRange = null,
-    objetivoFiltradas = 150,
-    maxCrudasTotal = 900,
+    objetivoFiltradas = 70,
+    maxCrudasTotal = 700,
     perPage = 100,
     filtroAdicional = () => true,
   } = {},
@@ -290,11 +353,14 @@ async function obtenerResenasFiltradas(
 
     let data
     try {
-      const respuesta = await axios.get(
+      // pedirSteam lleva la UA de navegador y el reintento único ante
+      // throttle; si el bloqueo persiste sube ErrorSteamBloqueado.
+      const respuesta = await pedirSteam(
         `https://store.steampowered.com/appreviews/${appId}?${params.toString()}`,
       )
       data = respuesta.data
     } catch (err) {
+      if (err instanceof ErrorSteamBloqueado) throw err
       console.error(`Error paginando reseñas de ${appId}:`, err.message)
       break
     }
@@ -590,8 +656,10 @@ function crearIntentoGroq(nombre, modelo) {
   }
 }
 
-// Los 3 modelos de Groq vigentes hoy (reemplazan a llama-3.3-70b-versatile,
-// llama-3.1-8b-instant, gemma2-9b-it y mixtral-8x7b-32768, todos deprecados/removidos).
+// Los 2 modelos de Groq vigentes hoy (reemplazan a llama-3.3-70b-versatile,
+// llama-3.1-8b-instant, gemma2-9b-it, mixtral-8x7b-32768 y qwen/qwen3.6-27b,
+// todos deprecados/removidos — el de qwen salió de Groq en 10/2026 y devolvía
+// 404 model_not_found).
 const intentoGptOss120b = crearIntentoGroq(
   'Groq (GPT-OSS 120B)',
   'openai/gpt-oss-120b',
@@ -599,12 +667,6 @@ const intentoGptOss120b = crearIntentoGroq(
 const intentoGptOss20b = crearIntentoGroq(
   'Groq (GPT-OSS 20B)',
   'openai/gpt-oss-20b',
-)
-// Ojo: qwen3.6-27b está listado como modelo "preview" en Groq (pensado para evaluación,
-// no para producción 100% estable). Lo dejamos como respaldo extra, no como principal.
-const intentoQwen36 = crearIntentoGroq(
-  'Groq (Qwen 3.6 27B)',
-  'qwen/qwen3.6-27b',
 )
 
 // Gemini como cuarto respaldo, fuera de Groq (otro proveedor = otro pool de cuota).
@@ -633,7 +695,6 @@ const intentoGemini = {
 // las 2 veces seguidas al mismo modelo/cuota como proveedor principal.
 const ORDEN_RECIENTES = [
   intentoGptOss120b,
-  intentoQwen36,
   intentoGptOss20b,
   intentoGemini,
 ]
@@ -641,7 +702,6 @@ const ORDEN_HISTORICOS = [
   intentoGptOss20b,
   intentoGemini,
   intentoGptOss120b,
-  intentoQwen36,
 ]
 
 // Cascada de proveedores: recorre el orden recibido y se queda con el primero que
@@ -792,10 +852,13 @@ app.get('/analizar/:appId', async (req, res) => {
 
     // La metadata va primero: la fecha de lanzamiento decide si el panel
     // histórico aplica y, por tanto, si vale la pena pedirle a Steam la
-    // muestra histórica y gastar la segunda llamada de IA.
+    // muestra histórica y gastar la segunda llamada de IA. pedirSteam
+    // (UA de navegador + reintento ante throttle): si el bloqueo persiste,
+    // ErrorSteamBloqueado cae al catch del endpoint y devuelve el 503 con
+    // mensaje claro, nunca el 500 genérico.
     const [resMetaGeneral, resAppDetails] = await Promise.all([
-      axios.get(urlMetaGeneral),
-      axios.get(urlAppDetails),
+      pedirSteam(urlMetaGeneral),
+      pedirSteam(urlAppDetails),
     ])
 
     // La clave del JSON no siempre es el appid pedido (ver helper).
@@ -829,7 +892,7 @@ app.get('/analizar/:appId', async (req, res) => {
       daysSinceRelease === null ? null : daysSinceRelease > 30
 
     // 2. TRAEMOS RESEÑAS YA FILTRADAS: se pide de a 100, filtrando basura y longitud
-    // (≤ 400 caracteres en el original) sobre la marcha, hasta juntar 150 candidatas válidas
+    // (≤ 400 caracteres en el original) sobre la marcha, hasta juntar 70 candidatas válidas
     // por columna (o hasta agotar las reseñas del juego, típico de indies/juegos nuevos).
     // "Recientes" además exige que la reseña sea de los últimos 30 días.
     // La muestra histórica SOLO se pide cuando el panel histórico aplica:
@@ -1054,6 +1117,16 @@ app.get('/analizar/:appId', async (req, res) => {
       igdb: igdbDatos,
     })
   } catch (error) {
+    if (error instanceof ErrorSteamBloqueado) {
+      // Steam limitó el acceso de esta IP (ver pedirSteam): el juego puede
+      // estar sano, el problema es el throttle, y dura minutos/horas. 503 +
+      // mensaje claro, nunca el 500 genérico.
+      console.error('Steam limitando el acceso (IP bloqueada por throttle).')
+      // `steamBloqueado` es un campo estable del contrato: la web lo usa para
+      // armar su cooldown cliente de 6 h (no le vuelve a pegar a Steam; ver
+      // App.jsx y AGENTS.md).
+      return res.status(503).json({ error: MSG_STEAM_BLOQUEADO, steamBloqueado: true })
+    }
     console.error('Error crítico en el analizador:', error.message)
     return res
       .status(500)

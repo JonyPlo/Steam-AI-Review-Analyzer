@@ -71,6 +71,18 @@ const REFRESH_COOLDOWN_MS = 10 * 60 * 1000
 // Cooldown corto (1 min) tras un refresh que falló o llegó degradado:
 // evita reintentar a ráfaga mientras los proveedores siguen caídos.
 const REFRESH_COOLDOWN_FALLA_MS = 60 * 1000
+// Cooldown del BLOQUE de Steam (ver AGENTS.md): el throttle de appreviews se
+// decae solo con silencio, pero cada request nueva lo re-escala. Tras recibir
+// el 503 con steamBloqueado, la app NO le vuelve a pegar a Steam durante este
+// lapso (ni carga ni refresh): muestra un aviso sin tocar el server. La clave
+// vive en localStorage y se limpia sola al expirar.
+const STEAM_BLOCK_COOLDOWN_MS = 6 * 60 * 60 * 1000
+const STEAM_BLOCK_KEY = 'steamBloqueo_1'
+// Detalle que ve la sala mientras dura el cooldown. Diferente del mensaje del
+// 503 (ese lo manda el server): acá la app ya sabe que la red está bloqueada y
+// avisa que se calla para no alargarlo.
+const MENSAJE_STEAM_COOLDOWN =
+  'Steam sigue limitando tu red. Para no alargar el bloqueo, la app no vuelve a intentar por unas horas: se reanuda sola, o sacalo antes borrando localStorage.'
 // Ventana del feedback de éxito: tras un refresh exitoso, el slot de la
 // fila de cabecera muestra "✓ Información actualizada" durante 4 s y
 // vuelve al sello. (Se define en un solo lugar.)
@@ -84,6 +96,29 @@ function guardarEnCache(clave, datos) {
     localStorage.setItem(clave, JSON.stringify({ datos, timestamp: Date.now() }))
   } catch {
     // cuota llena: la app sigue funcionando sin caché
+  }
+}
+
+// ---- Cooldown del bloque de Steam ----
+// La clave guarda el timestamp (ms) en que expira el cooldown. Solo se lee;
+// al expirar la siguiente carga/refresh normal re-pide y, si bloquea otra vez,
+// sobrescribe el valor. Sin storage no hay cooldown (la app igual funciona).
+function steamBloqueoActivo() {
+  try {
+    return Number(localStorage.getItem(STEAM_BLOCK_KEY) || 0) > Date.now()
+  } catch {
+    return false
+  }
+}
+
+function registrarSteamBloqueo() {
+  try {
+    localStorage.setItem(
+      STEAM_BLOCK_KEY,
+      String(Date.now() + STEAM_BLOCK_COOLDOWN_MS),
+    )
+  } catch {
+    /* sin storage: sin cooldown, pero la app sigue funcionando */
   }
 }
 
@@ -1011,12 +1046,34 @@ export default function App() {
         return
       }
 
+      // La red está bajo el cooldown del bloque de Steam: no se le pega a
+      // /analizar (cada intento re-escala el throttle y lo alarga). La caché
+      // ya se consultó arriba: si había copia buena, se usó y no se llegó acá.
+      if (steamBloqueoActivo()) {
+        setAnalysisError(`No se pudo cargar el análisis. ${MENSAJE_STEAM_COOLDOWN}`)
+        return
+      }
+
       setLoadingAnalysis(true)
       try {
         const res = await fetch(`${API_BASE}/analizar/${appId}`)
-        const json = await res.json()
+        let json = null
+        try {
+          json = await res.json()
+        } catch {
+          /* cuerpo no-JSON: se trata como fallo genérico abajo */
+        }
         if (!res.ok || !json || json.error) {
-          throw new Error(json?.error || 'HTTP ' + res.status)
+          // 503 con steamBloqueado: arranca el cooldown de 6 h — mientras
+          // dure, la app no le vuelve a pegar a Steam (ver helpers de arriba
+          // y AGENTS.md).
+          if (json?.steamBloqueado) registrarSteamBloqueo()
+          // Con el mensaje propio del server cuando existe (ej. el 503 de
+          // "Steam limitando la red"): llega hasta el detalle de la
+          // pantalla de error. Sin él, el genérico clásico.
+          throw new Error(
+            json?.error || 'Puede ser un problema de conexión o de los proveedores de IA.',
+          )
         }
         // El sello "Actualizado hace X" y el cooldown del botón
         // "Actualizar" parten de cuándo se generó ESTE análisis, no de
@@ -1033,7 +1090,14 @@ export default function App() {
         setAnalisisData(json)
       } catch (err) {
         console.error('Error cargando análisis:', err)
-        setAnalysisError('No se pudo cargar el análisis. Puede ser un problema de conexión o de los proveedores de IA.')
+        // Un fetch que nunca llega (server caído, sin red) es un TypeError
+        // genérico del navegador: ahí no hay mensaje específico y queda el
+        // texto clásico. Si el server trajo uno (json.error), se muestra ese.
+        const detalle =
+          /Failed to fetch|NetworkError|Load failed/i.test(err?.message || '')
+            ? 'Puede ser un problema de conexión o de los proveedores de IA.'
+            : err?.message || 'Puede ser un problema de conexión o de los proveedores de IA.'
+        setAnalysisError(`No se pudo cargar el análisis. ${detalle}`)
       } finally {
         setLoadingAnalysis(false)
       }
@@ -1071,6 +1135,13 @@ export default function App() {
     }
 
     try {
+      // Cooldown del bloque de Steam: sin request al server; solo el aviso
+      // inline junto al botón y su cooldown corto, como cualquier otro fallo
+      // de refresh. (El finally de abajo limpia el estado de vuelo igual.)
+      if (steamBloqueoActivo()) {
+        registrarFallo(MENSAJE_STEAM_COOLDOWN)
+        return
+      }
       const res = await fetch(`${API_BASE}/analizar/${appId}?refresh=1`)
       let json = null
       try {
@@ -1079,6 +1150,8 @@ export default function App() {
         /* cuerpo no-JSON: se trata como fallo abajo */
       }
       if (!res.ok || !json || json.error) {
+        // 503 con steamBloqueado: (re)arranca el cooldown de 6 h.
+        if (json?.steamBloqueado) registrarSteamBloqueo()
         // Falla HTTP: si el server trae un mensaje propio se muestra
         // ese (es más específico que el genérico).
         registrarFallo(
